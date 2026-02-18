@@ -1,0 +1,51 @@
+{
+  "snapshot_path": "data/20260217_030324",
+  "row_count": 635314,
+  "files": [
+    {
+      "name": "XAUUSD_M5_2016.csv",
+      "size_bytes": 408001
+    },
+    {
+      "name": "XAUUSD_M5_2017.csv",
+      "size_bytes": 3915326
+    },
+    {
+      "name": "XAUUSD_M5_2018.csv",
+      "size_bytes": 5022739
+    },
+    {
+      "name": "XAUUSD_M5_2019.csv",
+      "size_bytes": 5003012
+    },
+    {
+      "name": "XAUUSD_M5_2020.csv",
+      "size_bytes": 5036424
+    },
+    {
+      "name": "XAUUSD_M5_2021.csv",
+      "size_bytes": 4999332
+    },
+    {
+      "name": "XAUUSD_M5_2022.csv",
+      "size_bytes": 5000957
+    },
+    {
+      "name": "XAUUSD_M5_2023.csv",
+      "size_bytes": 4979830
+    },
+    {
+      "name": "XAUUSD_M5_2024.csv",
+      "size_bytes": 5035115
+    },
+    {
+      "name": "XAUUSD_M5_2025.csv",
+      "size_bytes": 5020240
+    },
+    {
+      "name": "XAUUSD_M5_2026.csv",
+      "size_bytes": 571267
+    }
+  ],
+  "files_hash_sha256": "00bcdaf0493ab4b6cf20ad9a472a05e6a5114a52268708380c26df24af08b9b7"
+}

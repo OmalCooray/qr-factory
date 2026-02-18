@@ -1,0 +1,17 @@
+seed: 42
+starting_capital: 10000
+n_trades: 200
+n_sims: 5000
+
+scenarios:
+  - name: "A_high_winrate_negative_EV"
+    p_win: 0.65
+    avg_win: 10
+    avg_loss: 25
+    commission_per_trade: 0
+
+  - name: "B_lower_winrate_positive_EV"
+    p_win: 0.45
+    avg_win: 30
+    avg_loss: 10
+    commission_per_trade: 0

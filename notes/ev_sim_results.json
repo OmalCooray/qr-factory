@@ -1,0 +1,22 @@
+[
+  {
+    "name": "A_high_winrate_negative_EV",
+    "expectancy_per_trade": -2.25,
+    "variance_per_trade": 278.6875,
+    "mean_ending_equity": 9551.29,
+    "median_ending_equity": 9550.0,
+    "std_ending_equity": 238.56,
+    "probability_of_loss": 0.9672,
+    "mean_max_drawdown": 550.36
+  },
+  {
+    "name": "B_lower_winrate_positive_EV",
+    "expectancy_per_trade": 8.0,
+    "variance_per_trade": 396.0,
+    "mean_ending_equity": 11601.76,
+    "median_ending_equity": 11600.0,
+    "std_ending_equity": 282.82,
+    "probability_of_loss": 0.0,
+    "mean_max_drawdown": 86.2
+  }
+]

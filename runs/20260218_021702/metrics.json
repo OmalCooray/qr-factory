@@ -1,0 +1,12 @@
+{
+  "run_id": "20260218_021702",
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "n_bars": 635314,
+  "start_ts": "2016-01-04T00:00:00+00:00",
+  "end_ts": "2026-02-13T23:55:00+00:00",
+  "starting_capital": 10000,
+  "ending_equity": 10000,
+  "pnl_abs": 0,
+  "pnl_pct": 0.0
+}

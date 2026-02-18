@@ -1,0 +1,5 @@
+symbol: XAUUSD
+timeframe: M5
+snapshot_dir: data/20260217_030324
+starting_capital: 10000
+output_dir: runs
