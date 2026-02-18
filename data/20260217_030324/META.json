@@ -1,0 +1,10 @@
+{
+  "snapshot_id": "20260217_030324",
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "broker": "ICMarketsSC-Demo",
+  "range_start": "2016-01-04",
+  "range_end": "2026-02-13",
+  "total_rows": 638482,
+  "downloaded_utc": "2026-02-17T03:03:40.692425+00:00"
+}
