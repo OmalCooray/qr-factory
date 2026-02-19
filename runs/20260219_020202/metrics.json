@@ -1,5 +1,5 @@
 {
-  "run_id": "20260218_021755",
+  "run_id": "20260219_020202",
   "symbol": "XAUUSD",
   "timeframe": "M5",
   "n_bars": 635314,
@@ -8,5 +8,7 @@
   "starting_capital": 10000,
   "ending_equity": 10000,
   "pnl_abs": 0,
-  "pnl_pct": 0.0
+  "pnl_pct": 0.0,
+  "git_commit": "0ed4550f24f95071e81f439594e0b9b555fabc54",
+  "git_dirty": true
 }

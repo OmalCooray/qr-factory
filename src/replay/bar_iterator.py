@@ -54,14 +54,8 @@ class BarIterator:
         # Sort ascending
         df = df.sort_values("time").reset_index(drop=True)
 
-        # Drop duplicate timestamps deterministically (keep first)
-        n_before = len(df)
-        df = df.drop_duplicates(subset=["time"], keep="first").reset_index(drop=True)
-        n_dropped = n_before - len(df)
-        if n_dropped > 0:
-            log.warning("Dropped %d duplicate timestamps", n_dropped)
-
-        # Assert monotonic increasing
+        # Assert monotonic increasing (defense-in-depth; validate_bars
+        # already enforces no duplicates and correct ordering).
         assert df["time"].is_monotonic_increasing, (
             "Timestamps are not monotonic increasing after dedup — data integrity issue"
         )

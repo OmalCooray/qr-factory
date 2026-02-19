@@ -13,7 +13,9 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from src.engine.git_info import get_git_info
 from src.replay.bar_iterator import BarIterator
+from src.replay.validation import validate_bars
 from src.reporting.plots import plot_close_price
 
 log = logging.getLogger(__name__)
@@ -55,8 +57,12 @@ def run_backtest(config_path: str) -> str:
     (run_dir / "plots").mkdir(exist_ok=True)
     (run_dir / "data_snapshot").mkdir(exist_ok=True)
 
+    # ── Capture git state ────────────────────────────────────────────
+    git = get_git_info(_REPO_ROOT)
+
     log.info("Run ID   : %s", run_id)
     log.info("Output   : %s", run_dir)
+    log.info("Git      : %s (dirty=%s)", git["git_commit"][:8], git["git_dirty"])
 
     # ── Load data ────────────────────────────────────────────────────
     csv_files = sorted(snapshot_dir.glob("*.csv"))
@@ -73,7 +79,11 @@ def run_backtest(config_path: str) -> str:
     df = pd.concat(frames, ignore_index=True)
     log.info("Total raw rows: %s", f"{len(df):,}")
 
-    # ── Build bar iterator (validates + dedupes + sorts) ─────────────
+    # ── Validate data integrity (fail-fast) ──────────────────────────
+    validate_bars(df)
+    log.info("Data validation passed ✓")
+
+    # ── Build bar iterator (validates + sorts) ───────────────────────
     bars = BarIterator(df)
     clean_df = bars.df
 
@@ -113,6 +123,8 @@ def run_backtest(config_path: str) -> str:
         "ending_equity": ending_equity,
         "pnl_abs": pnl_abs,
         "pnl_pct": pnl_pct,
+        "git_commit": git["git_commit"],
+        "git_dirty": git["git_dirty"],
     }
     (run_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2), encoding="utf-8",
