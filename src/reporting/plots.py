@@ -37,3 +37,34 @@ def plot_close_price(df: pd.DataFrame, out_path: str | Path) -> None:
     plt.close(fig)
 
     log.info("Saved close-price plot → %s", out_path)
+
+
+def plot_equity(df: pd.DataFrame, out_path: str | Path) -> None:
+    """Plot equity curve and save as PNG.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must contain ``timestamp`` and ``equity`` columns.
+    out_path : str | Path
+        Destination file path.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Ensure timestamp is datetime
+    if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+        df = df.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(df["timestamp"], df["equity"], linewidth=1.0, color="#2ecc71")
+    ax.set_title(f"Equity Curve")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Equity")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+
+    log.info("Saved equity plot → %s", out_path)
