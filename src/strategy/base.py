@@ -1,19 +1,8 @@
 from dataclasses import dataclass
-from typing import Optional, Protocol, Sequence, runtime_checkable
+from typing import Protocol, Sequence, runtime_checkable
 import pandas as pd
-import numpy as np
 
-@dataclass(frozen=True)
-class StrategyDecision:
-    """
-    Represents what the strategy wants the engine to do.
-    Primary output is target position (signed float).
-    """
-    target_position: float               # -size short, +size long, 0 flat
-    stop_loss: Optional[float] = None    # price level (optional)
-    take_profit: Optional[float] = None  # price level (optional)
-    exit_now: bool = False               # optional explicit flatten request
-    reason: str = ""                     # debug
+from src.strategy.signal import Signal
 
 @dataclass(frozen=True)
 class StrategyContext:
@@ -47,9 +36,11 @@ class Strategy(Protocol):
         """
         ...
 
-    def on_bar(self, ctx: StrategyContext) -> StrategyDecision:
+    def on_bar(self, ctx: StrategyContext) -> Signal:
         """
-        Produces StrategyDecision for the current bar.
+        Produces a Signal for the current bar.
+
+        The decision layer converts Signal → OrderIntent based on risk and sizing.
         """
         ...
 

@@ -1,0 +1,13 @@
+symbol: "XAUUSD"
+timeframe: "M5"
+snapshot_dir: "data/20260217_030324"
+starting_capital: 1000.0
+output_dir: "runs"
+
+strategy:
+  type: "adx_filtered"
+  indicator_type: "sma"
+  fast_period: 10
+  slow_period: 30
+  adx_period: 14
+  adx_threshold: 25.0

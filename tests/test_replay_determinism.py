@@ -70,6 +70,11 @@ def test_replay_determinism(tmp_path: Path) -> None:
         "snapshot_dir": str(data_dir),  # Absolute path handled by runner or relative
         "starting_capital": 10000.0,
         "output_dir": str(output_dir),
+        "strategy": {
+            "type": "ma_crossover",
+            "fast_period": 10,
+            "slow_period": 30,
+        },
     }
     
     config_path = base_dir / "test_config.yaml"
@@ -106,10 +111,11 @@ def test_replay_determinism(tmp_path: Path) -> None:
     
     # Fields that MUST be identical
     keys_to_compare = [
-        "symbol", "timeframe", "n_bars", 
-        "start_ts", "end_ts", 
-        "starting_capital", "ending_equity", 
-        "pnl_abs", "pnl_pct"
+        "symbol", "timeframe", "n_bars",
+        "start_ts", "end_ts",
+        "starting_capital", "ending_equity",
+        "total_pnl", "n_trades",
+        "max_drawdown_pct", "risk_halted",
     ]
     
     for key in keys_to_compare:

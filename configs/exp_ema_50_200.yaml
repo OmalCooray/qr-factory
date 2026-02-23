@@ -1,0 +1,13 @@
+symbol: "XAUUSD"
+timeframe: "M5"
+snapshot_dir: "data/20260217_030324"
+starting_capital: 1000.0
+output_dir: "runs"
+daily_drawdown_pct: 3.0
+monthly_drawdown_pct: 7.0
+
+strategy:
+  type: "ma_crossover"
+  indicator_type: "ema"
+  fast_period: 50
+  slow_period: 200

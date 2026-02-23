@@ -38,8 +38,11 @@ def test_ma_crossover_backtest_smoke(tmp_path):
         "snapshot_dir": str(data_dir),
         "starting_capital": 10000.0,
         "output_dir": str(tmp_path / "runs"),
-        "fast_period": 2,
-        "slow_period": 5
+        "strategy": {
+            "type": "ma_crossover",
+            "fast_period": 2,
+            "slow_period": 5,
+        },
     }
     
     config_path = tmp_path / "config.yaml"

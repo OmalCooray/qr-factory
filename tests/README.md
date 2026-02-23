@@ -6,6 +6,7 @@ This directory contains automated tests for the `qr-factory` backtesting engine.
 
 ### Unit Tests
 - **[test_validate_bars.py](file:///c:/quant/qr-factory/tests/test_validate_bars.py)**: Verifies the data integrity checks for OHLC bars (e.g., missing columns, null timestamps, duplicate timestamps, non-monotonic data, and invalid spreads).
+- **[test_feature_pipeline.py](file:///c:/quant/qr-factory/tests/test_feature_pipeline.py)**: Verifies the feature engineering system, including `Indicator` and `Transform` protocols, `SMA` implementation, pipeline composition, naming determinism, and custom indicator support.
 
 ### Integration Tests
 - **[test_replay_determinism.py](file:///c:/quant/qr-factory/tests/test_replay_determinism.py)**: Ensures the engine is deterministic by running identical backtests and verifying that output artifacts (equity curves, metrics, and data snapshots) match exactly across runs.
