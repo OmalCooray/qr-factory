@@ -150,11 +150,23 @@ class TradingEngine:
         self._pending_intent = intent
 
     def _decide(self, signal: Signal, risk_action: RiskAction) -> OrderIntent:
-        """Convert Signal + RiskAction → OrderIntent (sizing + risk gate)."""
+        """Convert Signal + RiskAction → OrderIntent (sizing + risk gate).
+
+        If the strategy encodes a dynamic lot size in signal.strength
+        (indicated by reason containing 'breakout' and strength being large),
+        it is used directly.  Otherwise the engine's fixed position_size applies.
+        """
         if risk_action.flatten:
             return OrderIntent(target_position=0.0, reason=f"risk:{risk_action.reason}")
 
-        target = signal.direction * self.position_size
+        # Use dynamic sizing when strategy provides it (strength > position_size
+        # is the marker that the strategy computed its own lot size)
+        if signal.strength > self.position_size and signal.direction != 0.0:
+            size = signal.strength
+        else:
+            size = self.position_size
+
+        target = signal.direction * size
         return OrderIntent(target_position=target, reason=signal.reason)
 
 

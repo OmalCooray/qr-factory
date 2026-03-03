@@ -9,6 +9,10 @@ dependencies = [
     "pandas>=2.2",
     "matplotlib>=3.9",
     "pyyaml>=6.0",
+    "hmmlearn>=0.3",
+    "ruptures>=1.1",
+    "scikit-learn>=1.4",
+    "statsmodels>=0.14",
 ]
 
 [project.scripts]

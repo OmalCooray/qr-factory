@@ -1,0 +1,25 @@
+symbol: XAUUSD
+timeframe: M5
+snapshot_dir: data/20260217_030324
+output_dir: runs
+starting_capital: 1000
+position_size: 1.0
+daily_drawdown_pct: 3.0
+monthly_drawdown_pct: 8.0
+
+strategy:
+  type: graph_mss
+  atr_period: 14
+  swing_lookback: 3
+  fvg_min_gap_atr: 0.5
+  ob_min_impulse_atr: 1.5
+  max_levels: 200
+  proximity_atr: 3.0
+  entry_threshold: 0.6
+  sl_atr_mult: 2.0
+  tp_atr_mult: 3.0
+  max_hold_bars: 50
+  risk_per_trade_pct: 0.002
+  detect_every: 10
+  recompute_every: 10
+  window_bars: 50

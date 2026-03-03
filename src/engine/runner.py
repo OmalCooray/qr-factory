@@ -144,7 +144,8 @@ def _run_replay(
 ) -> None:
     """Iterate bars, calling engine.process_bar() for each."""
     steps = len(clean_df)
-    log.info("Starting replay...")
+    log_every = max(1, steps // 10)
+    log.info("Starting replay (%s bars)...", f"{steps:,}")
     for i in range(steps):
         engine.process_bar(
             bar_row=clean_df.iloc[i],
@@ -152,6 +153,8 @@ def _run_replay(
             bar_index=i,
             is_last=(i == steps - 1),
         )
+        if (i + 1) % log_every == 0:
+            log.info("  Replay progress: %s/%s (%d%%)", f"{i+1:,}", f"{steps:,}", (i+1)*100//steps)
 
 
 # ── 7. METRICS ───────────────────────────────────────────────────────────────
@@ -288,7 +291,25 @@ def _write_artifacts(
     )
     log.info("Wrote DATA_REF.json")
 
-    # 7. README.md
+    # 7. regime.csv (if strategy records regime info)
+    if hasattr(strategy, "regime_records") and strategy.regime_records:
+        regime_df = pd.DataFrame(strategy.regime_records)
+        regime_df.to_csv(run_dir / "regime.csv", index=False)
+        log.info("Wrote regime.csv  (%s rows)", f"{len(regime_df):,}")
+
+    # 7b. graph_state.csv (if strategy records graph state)
+    if hasattr(strategy, "graph_state_records") and strategy.graph_state_records:
+        gs_df = pd.DataFrame(strategy.graph_state_records)
+        gs_df.to_csv(run_dir / "graph_state.csv", index=False)
+        log.info("Wrote graph_state.csv  (%s rows)", f"{len(gs_df):,}")
+
+    # 7c. levels.csv (if strategy records structural levels)
+    if hasattr(strategy, "level_records") and strategy.level_records:
+        lv_df = pd.DataFrame(strategy.level_records)
+        lv_df.to_csv(run_dir / "levels.csv", index=False)
+        log.info("Wrote levels.csv  (%s rows)", f"{len(lv_df):,}")
+
+    # 8. README.md
     n_trades = metrics["n_trades"]
     total_pnl = metrics["total_pnl"]
     readme_lines = [

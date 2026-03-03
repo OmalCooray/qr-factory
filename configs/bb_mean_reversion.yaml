@@ -1,0 +1,16 @@
+symbol: "XAUUSD"
+timeframe: "M5"
+snapshot_dir: "data/20260217_030324"
+starting_capital: 1000.0
+output_dir: "runs"
+position_size: 1.0
+strategy:
+  type: bb_mean_reversion
+  cci_period: 20
+  bb_period: 20
+  bb_mult: 2.0
+  atr_period: 14
+  cci_entry: 100.0
+  sl_atr_mult: 2.0
+  adx_period: 14
+  adx_max_threshold: 25.0
