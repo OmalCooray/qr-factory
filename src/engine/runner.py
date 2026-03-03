@@ -28,10 +28,11 @@ import yaml
 
 from src.engine.core import TradingEngine
 from src.engine.git_info import get_git_info
+from src.execution.costs import CostConfig
 from src.indicators.core.pipeline import FeaturePipeline, FeatureSpec
 from src.replay.bar_iterator import BarIterator
 from src.replay.validation import validate_bars
-from src.reporting.plots import plot_close_price, plot_equity
+from src.reporting.plots import plot_close_price, plot_equity, plot_gross_vs_net_equity
 from src.risk import RiskConfig, RiskManager
 from src.strategy.base import Strategy
 from src.strategy.registry import build_strategy
@@ -47,10 +48,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 def _load_config(
     config_path: str,
-) -> tuple[Path, dict, Strategy, list[FeatureSpec], RiskConfig]:
-    """Parse YAML, build strategy, extract risk config.
+) -> tuple[Path, dict, Strategy, list[FeatureSpec], RiskConfig, CostConfig]:
+    """Parse YAML, build strategy, extract risk and cost configs.
 
-    Returns (cfg_path, cfg_dict, strategy, feature_specs, risk_config).
+    Returns (cfg_path, cfg_dict, strategy, feature_specs, risk_config, cost_config).
     """
     cfg_path = Path(config_path)
     if not cfg_path.is_absolute():
@@ -72,7 +73,15 @@ def _load_config(
         monthly_dd_limit=cfg.get("monthly_drawdown_pct", None),
     )
 
-    return cfg_path, cfg, strategy, feature_specs, risk_config
+    # Execution costs (defaults to zero if section missing)
+    exec_cfg = cfg.get("execution", {})
+    cost_config = CostConfig(
+        spread_points=exec_cfg.get("spread_points", 0.0),
+        slippage_points=exec_cfg.get("slippage_points", 0.0),
+        point_value=exec_cfg.get("point_value", 1.0),
+    )
+
+    return cfg_path, cfg, strategy, feature_specs, risk_config, cost_config
 
 
 # ── 2. RUN SETUP ────────────────────────────────────────────────────────────
@@ -203,6 +212,15 @@ def _compute_metrics(
     if pd.isna(avg_loss):
         avg_loss = 0.0
 
+    # Cost breakdown
+    total_gross_pnl = float(trades_df["gross_pnl"].sum()) if not trades_df.empty else 0.0
+    total_net_pnl = float(total_pnl)
+    total_cost_pnl = total_gross_pnl - total_net_pnl
+    avg_cost_per_trade = total_cost_pnl / max(1, n_trades)
+    cost_as_pct_of_gross_abs = (
+        total_cost_pnl / max(1e-12, abs(total_gross_pnl)) * 100
+    )
+
     return {
         "run_id": run_id,
         "symbol": cfg["symbol"],
@@ -217,6 +235,11 @@ def _compute_metrics(
         "win_rate": float(win_rate),
         "average_win": float(avg_win),
         "average_loss": float(avg_loss),
+        "total_gross_pnl": total_gross_pnl,
+        "total_net_pnl": total_net_pnl,
+        "total_cost_pnl": float(total_cost_pnl),
+        "avg_cost_per_trade": float(avg_cost_per_trade),
+        "cost_as_pct_of_gross_abs": float(cost_as_pct_of_gross_abs),
         **engine.risk_manager.metrics(),
         "git_commit": git["git_commit"],
         "git_dirty": git["git_dirty"],
@@ -244,9 +267,17 @@ def _write_artifacts(
     # 1. config.yaml
     shutil.copy2(cfg_path, run_dir / "config.yaml")
 
-    # 2. equity.csv
-    equity_df.to_csv(run_dir / "equity.csv", index=False)
-    log.info("Wrote equity.csv  (%s rows)", f"{len(equity_df):,}")
+    # 2. equity.csv (NET — excludes equity_gross column)
+    equity_net_df = equity_df.drop(columns=["equity_gross"])
+    equity_net_df.to_csv(run_dir / "equity.csv", index=False)
+    log.info("Wrote equity.csv  (%s rows)", f"{len(equity_net_df):,}")
+
+    # 2b. equity_gross.csv (GROSS)
+    equity_gross_df = equity_df[["timestamp", "equity_gross"]].rename(
+        columns={"equity_gross": "equity"}
+    )
+    equity_gross_df.to_csv(run_dir / "equity_gross.csv", index=False)
+    log.info("Wrote equity_gross.csv  (%s rows)", f"{len(equity_gross_df):,}")
 
     # 3. trades.csv
     if not trades_df.empty:
@@ -265,7 +296,8 @@ def _write_artifacts(
 
     # 5. plots
     plot_close_price(clean_df, run_dir / "plots" / "close_price.png")
-    plot_equity(equity_df, run_dir / "plots" / "equity.png")
+    plot_equity(equity_net_df, run_dir / "plots" / "equity.png")
+    plot_gross_vs_net_equity(equity_df, run_dir / "plots" / "gross_vs_net_equity.png")
 
     # 6. data_snapshot/DATA_REF.json
     snapshot_rel = cfg["snapshot_dir"]
@@ -312,12 +344,15 @@ def _write_artifacts(
     # 8. README.md
     n_trades = metrics["n_trades"]
     total_pnl = metrics["total_pnl"]
+    total_cost = metrics["total_cost_pnl"]
     readme_lines = [
-        f"{strategy.name} Backtest",
+        f"{strategy.name} Backtest (spread+slippage cost model)",
         f"Symbol: {cfg['symbol']} {cfg['timeframe']}",
         f"Run ID: {metrics['run_id']}",
-        f"Trades: {n_trades}, Total PnL: {total_pnl:.2f}",
+        f"Trades: {n_trades}, Net PnL: {total_pnl:.2f}, Cost: {total_cost:.2f}",
         f"Reproduce: uv run python -m src backtest --config {config_path_str}",
+        f"Artifacts: gross_vs_net_equity.png, metrics.json (cost breakdown)",
+        f"Sanity: cost=0 => net_pnl == gross_pnl for all trades",
     ]
     (run_dir / "README.md").write_text(
         "\n".join(readme_lines) + "\n", encoding="utf-8",
@@ -344,7 +379,7 @@ def run_backtest(config_path: str) -> str:
         The generated ``run_id``.
     """
     # ── 1. CONFIGURATION ──
-    cfg_path, cfg, strategy, feature_specs, risk_config = _load_config(config_path)
+    cfg_path, cfg, strategy, feature_specs, risk_config, cost_config = _load_config(config_path)
 
     # ── 2. RUN SETUP ──
     run_id, run_dir = _create_run_dir(cfg)
@@ -378,7 +413,7 @@ def run_backtest(config_path: str) -> str:
     position_size: float = cfg.get("position_size", 1.0)
     risk_manager = RiskManager(risk_config, starting_capital)
 
-    engine = TradingEngine(strategy, risk_manager, starting_capital, position_size)
+    engine = TradingEngine(strategy, risk_manager, starting_capital, position_size, cost_config)
     _run_replay(engine, clean_df, X)
 
     # ── 7. METRICS ──

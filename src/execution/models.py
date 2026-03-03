@@ -30,6 +30,12 @@ class Fill:
     entry_price: float
     exit_price: float
     pnl: float
+    gross_pnl: float = 0.0
+
+    @property
+    def cost_pnl(self) -> float:
+        """Transaction cost = gross_pnl - net_pnl (always >= 0)."""
+        return self.gross_pnl - self.pnl
 
     def to_dict(self) -> dict:
         return {
@@ -40,4 +46,7 @@ class Fill:
             "entry_price": self.entry_price,
             "exit_price": self.exit_price,
             "pnl": self.pnl,
+            "gross_pnl": self.gross_pnl,
+            "net_pnl": self.pnl,
+            "cost_pnl": self.cost_pnl,
         }

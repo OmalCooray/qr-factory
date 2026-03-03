@@ -14,6 +14,7 @@ from typing import Optional
 
 import pandas as pd
 
+from src.execution.costs import CostConfig, cost_adjusted_price
 from src.execution.models import Fill, OrderIntent
 from src.risk import RiskAction, RiskManager
 from src.strategy.base import Strategy, StrategyContext
@@ -35,6 +36,8 @@ class TradingEngine:
         Initial equity.
     position_size : float
         Size multiplier applied when converting Signal → OrderIntent.
+    cost_config : CostConfig
+        Execution cost parameters (spread + slippage).  Defaults to zero cost.
     """
 
     def __init__(
@@ -43,16 +46,20 @@ class TradingEngine:
         risk_manager: RiskManager,
         starting_capital: float,
         position_size: float = 1.0,
+        cost_config: CostConfig | None = None,
     ) -> None:
         self.strategy = strategy
         self.risk_manager = risk_manager
         self.starting_capital = starting_capital
         self.position_size = position_size
+        self.cost_config = cost_config or CostConfig()
 
         # Position state
         self._equity = starting_capital
+        self._equity_gross = starting_capital
         self._position = 0.0
-        self._entry_price = 0.0
+        self._entry_price = 0.0  # net (cost-adjusted)
+        self._entry_mid = 0.0  # mid (for gross tracking)
         self._entry_ts = ""
         self._pending_intent: Optional[OrderIntent] = None
 
@@ -85,32 +92,49 @@ class TradingEngine:
             if self._pending_intent is not None
             else self._position
         )
-        self._position, self._entry_price, self._entry_ts, fills = _execute_order(
+        (
+            self._position,
+            self._entry_price,
+            self._entry_mid,
+            self._entry_ts,
+            fills,
+        ) = _execute_order(
             target_position,
             self._position,
             self._entry_price,
+            self._entry_mid,
             self._entry_ts,
             bar_row["open"],
             bar_ts_str,
+            self.cost_config,
         )
         for f in fills:
             self._equity += f.pnl
+            self._equity_gross += f.gross_pnl
         self.all_fills.extend(fills)
 
         # ── MARK-TO-MARKET at Close ──
         current_close = bar_row["close"]
         unrealized_pnl = 0.0
+        unrealized_pnl_gross = 0.0
         if self._position != 0:
             if self._position > 0:
                 unrealized_pnl = (current_close - self._entry_price) * abs(
+                    self._position
+                )
+                unrealized_pnl_gross = (current_close - self._entry_mid) * abs(
                     self._position
                 )
             else:
                 unrealized_pnl = (self._entry_price - current_close) * abs(
                     self._position
                 )
+                unrealized_pnl_gross = (self._entry_mid - current_close) * abs(
+                    self._position
+                )
 
         current_equity = self._equity + unrealized_pnl
+        current_equity_gross = self._equity_gross + unrealized_pnl_gross
 
         # ── RISK LAYER: check drawdown limits ──
         risk_action = self.risk_manager.update(bar_ts, current_equity)
@@ -122,6 +146,7 @@ class TradingEngine:
             {
                 "timestamp": bar_ts_str,
                 "equity": current_equity,
+                "equity_gross": current_equity_gross,
                 "position": self._position,
                 "unrealized_pnl": unrealized_pnl,
                 "realized_pnl": self._equity - self.starting_capital,
@@ -174,32 +199,40 @@ def _execute_order(
     target_position: float,
     position: float,
     entry_price: float,
+    entry_mid: float,
     entry_ts: str,
     bar_open: float,
     bar_ts: str,
-) -> tuple[float, float, str, list[Fill]]:
+    cost_config: CostConfig,
+) -> tuple[float, float, float, str, list[Fill]]:
     """Execute a position change at the current bar's open price.
 
     Returns
     -------
-    tuple of (new_position, new_entry_price, new_entry_ts, fills)
+    tuple of (new_position, new_entry_price, new_entry_mid, new_entry_ts, fills)
     """
     fills: list[Fill] = []
 
     if position == target_position:
-        return position, entry_price, entry_ts, fills
+        return position, entry_price, entry_mid, entry_ts, fills
 
     # Close existing position if flattening or flipping
     if position != 0:
         if (position > 0 and target_position <= 0) or (
             position < 0 and target_position >= 0
         ):
-            exit_price = bar_open
+            # Closing long = SELL; closing short = BUY
+            is_buy_exit = position < 0
+            exit_price = cost_adjusted_price(bar_open, is_buy_exit, cost_config)
+            exit_mid = bar_open
+
             if position > 0:
                 pnl = (exit_price - entry_price) * abs(position)
+                gross_pnl = (exit_mid - entry_mid) * abs(position)
                 side = "long"
             else:
                 pnl = (entry_price - exit_price) * abs(position)
+                gross_pnl = (entry_mid - exit_mid) * abs(position)
                 side = "short"
 
             fills.append(
@@ -211,15 +244,19 @@ def _execute_order(
                     entry_price=entry_price,
                     exit_price=exit_price,
                     pnl=pnl,
+                    gross_pnl=gross_pnl,
                 )
             )
             position = 0.0
             entry_price = 0.0
+            entry_mid = 0.0
 
     # Open new position (or flip into new)
     if target_position != 0 and position == 0:
+        is_buy_entry = target_position > 0
+        entry_price = cost_adjusted_price(bar_open, is_buy_entry, cost_config)
+        entry_mid = bar_open
         position = target_position
-        entry_price = bar_open
         entry_ts = bar_ts
 
-    return position, entry_price, entry_ts, fills
+    return position, entry_price, entry_mid, entry_ts, fills

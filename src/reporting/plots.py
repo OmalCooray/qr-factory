@@ -68,3 +68,37 @@ def plot_equity(df: pd.DataFrame, out_path: str | Path) -> None:
     plt.close(fig)
 
     log.info("Saved equity plot → %s", out_path)
+
+
+def plot_gross_vs_net_equity(df: pd.DataFrame, out_path: str | Path) -> None:
+    """Plot gross and net equity curves on the same chart.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must contain ``timestamp``, ``equity`` (net), and ``equity_gross`` columns.
+    out_path : str | Path
+        Destination file path.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plot_df = df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(plot_df["timestamp"]):
+        plot_df["timestamp"] = pd.to_datetime(plot_df["timestamp"], utc=True)
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(plot_df["timestamp"], plot_df["equity_gross"], linewidth=1.0,
+            color="#3498db", label="Gross")
+    ax.plot(plot_df["timestamp"], plot_df["equity"], linewidth=1.0,
+            color="#e74c3c", label="Net")
+    ax.set_title("Gross vs Net Equity")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Equity")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+
+    log.info("Saved gross-vs-net equity plot → %s", out_path)
