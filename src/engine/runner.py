@@ -32,7 +32,7 @@ from src.execution.costs import CostConfig
 from src.indicators.core.pipeline import FeaturePipeline, FeatureSpec
 from src.replay.bar_iterator import BarIterator
 from src.replay.validation import validate_bars
-from src.reporting.plots import plot_close_price, plot_equity, plot_gross_vs_net_equity
+from src.reporting.plots import plot_close_price, plot_equity, plot_fold_pnl, plot_gross_vs_net_equity
 from src.risk import RiskConfig, RiskManager
 from src.strategy.base import Strategy
 from src.strategy.registry import build_strategy
@@ -360,6 +360,243 @@ def _write_artifacts(
     log.info("Wrote README.md")
 
 
+# ── WALK-FORWARD ORCHESTRATION ───────────────────────────────────────────────
+
+
+def _run_walk_forward(
+    cfg: dict,
+    cfg_path: Path,
+    config_path_str: str,
+    clean_df: pd.DataFrame,
+    features: pd.DataFrame,
+    csv_files: list[Path],
+    risk_config: RiskConfig,
+    cost_config: CostConfig,
+    git: dict,
+    run_id: str,
+    run_dir: Path,
+) -> str:
+    """Run walk-forward backtest: multiple folds via TimeSeriesSplitter.
+
+    Each fold gets a fresh strategy and engine.  Only the test slice is traded.
+    The training slice exists for future ML model fitting.
+
+    **Equity semantics:** folds are independent evaluations — each fold starts
+    with a fresh portfolio at ``starting_capital``.  The aggregate
+    ``ending_equity`` reported in metrics.json equals
+    ``starting_capital + sum(per-fold net PnL)``; it is *not* a compounded
+    equity curve.  Stitching folds into one continuous curve requires an
+    explicit capital-carryover policy (not implemented here).
+
+    **Feature causality assumption:** ``features`` are pre-computed on the
+    full dataset *before* splitting.  This is safe only if every indicator
+    and transform in the ``FeaturePipeline`` is strictly causal (uses only
+    past/current bars, never future bars).  All current implementations
+    (SMA, EMA, ADX, ATR, RSI, BB, Donchian, rolling Z-score, diff, lag)
+    satisfy this property.  A regression test
+    (``test_feature_pipeline_causality``) guards against future violations.
+
+    Returns the run_id.
+    """
+    from src.validation import TimeSeriesSplitter
+
+    val_cfg = cfg["validation"]
+    splitter = TimeSeriesSplitter(
+        mode=val_cfg["mode"],
+        train_size=val_cfg["train_size"],
+        test_size=val_cfg["test_size"],
+        step=val_cfg.get("step"),
+        drop_last=val_cfg.get("drop_last", True),
+    )
+
+    folds = list(splitter.split(len(clean_df)))
+    assert len(folds) > 0, "Splitter produced no folds"
+    log.info("Walk-forward: %d folds (%s)", len(folds), splitter)
+
+    starting_capital: float = cfg["starting_capital"]
+    position_size: float = cfg.get("position_size", 1.0)
+
+    fold_results: list[dict[str, Any]] = []
+    all_equity_records: list[dict] = []
+    all_fills: list = []
+
+    for fold_id, (train_idx, test_idx) in enumerate(folds):
+        assert train_idx[-1] < test_idx[0], (
+            f"Fold {fold_id}: train/test leakage — "
+            f"train_end={train_idx[-1]} >= test_start={test_idx[0]}"
+        )
+
+        test_start = int(test_idx[0])
+        test_end = int(test_idx[-1]) + 1
+
+        log.info(
+            "  Fold %d/%d: train[%d:%d] test[%d:%d] (%d bars)",
+            fold_id + 1,
+            len(folds),
+            int(train_idx[0]),
+            int(train_idx[-1]) + 1,
+            test_start,
+            test_end,
+            len(test_idx),
+        )
+
+        # Fresh strategy + engine per fold (no state carryover)
+        strategy, _ = build_strategy(cfg["strategy"])
+        risk_manager = RiskManager(risk_config, starting_capital)
+        engine = TradingEngine(
+            strategy, risk_manager, starting_capital, position_size, cost_config,
+        )
+
+        # Run replay on test slice only
+        test_bars = clean_df.iloc[test_start:test_end]
+        test_features = features.iloc[test_start:test_end]
+        _run_replay(engine, test_bars, test_features)
+
+        # ── Per-fold metrics ──
+        trades_df = pd.DataFrame([f.to_dict() for f in engine.all_fills])
+        n_trades = len(trades_df)
+        net_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
+        gross_pnl = float(trades_df["gross_pnl"].sum()) if not trades_df.empty else 0.0
+        max_dd = engine.risk_manager.metrics()["max_drawdown_pct"]
+        eq_df = pd.DataFrame(engine.equity_records)
+        ending_equity = (
+            float(eq_df["equity"].iloc[-1])
+            if not eq_df.empty
+            else starting_capital
+        )
+        win_rate = float((trades_df["pnl"] > 0).mean()) if n_trades > 0 else 0.0
+
+        fold_results.append({
+            "fold_id": fold_id,
+            "train_start": int(train_idx[0]),
+            "train_end": int(train_idx[-1]),
+            "test_start": test_start,
+            "test_end": int(test_idx[-1]),
+            "test_bars": len(test_idx),
+            "n_trades": n_trades,
+            "gross_pnl": gross_pnl,
+            "net_pnl": net_pnl,
+            "max_drawdown_pct": max_dd,
+            "ending_equity": ending_equity,
+            "win_rate": win_rate,
+        })
+
+        all_equity_records.extend(engine.equity_records)
+        all_fills.extend(engine.all_fills)
+
+    # ── Aggregate across folds ──
+    total_trades = sum(f["n_trades"] for f in fold_results)
+    total_net_pnl = sum(f["net_pnl"] for f in fold_results)
+    total_gross_pnl = sum(f["gross_pnl"] for f in fold_results)
+    total_cost_pnl = total_gross_pnl - total_net_pnl
+    worst_dd = max(f["max_drawdown_pct"] for f in fold_results)
+
+    all_trades_df = pd.DataFrame([f.to_dict() for f in all_fills])
+    overall_win_rate = (
+        float((all_trades_df["pnl"] > 0).mean())
+        if not all_trades_df.empty
+        else 0.0
+    )
+
+    aggregate = {
+        "n_folds": len(folds),
+        "total_trades": total_trades,
+        "total_net_pnl": total_net_pnl,
+        "total_gross_pnl": total_gross_pnl,
+        "total_cost_pnl": total_cost_pnl,
+        "worst_drawdown_pct": worst_dd,
+        "avg_net_pnl_per_fold": total_net_pnl / len(folds),
+        "overall_win_rate": overall_win_rate,
+    }
+
+    # ── Write fold_metrics.json ──
+    fold_output = {"folds": fold_results, "aggregate": aggregate}
+    (run_dir / "fold_metrics.json").write_text(
+        json.dumps(fold_output, indent=2), encoding="utf-8",
+    )
+    log.info("Wrote fold_metrics.json  (%d folds)", len(folds))
+
+    # ── Per-fold PnL bar chart ──
+    plot_fold_pnl(fold_results, run_dir / "plots" / "fold_pnl.png")
+
+    # ── Build metrics.json (compatible with single-run format) ──
+    avg_win = (
+        float(all_trades_df.loc[all_trades_df["pnl"] > 0, "pnl"].mean())
+        if not all_trades_df.empty and (all_trades_df["pnl"] > 0).any()
+        else 0.0
+    )
+    avg_loss = (
+        float(all_trades_df.loc[all_trades_df["pnl"] < 0, "pnl"].mean())
+        if not all_trades_df.empty and (all_trades_df["pnl"] < 0).any()
+        else 0.0
+    )
+
+    metrics: dict[str, Any] = {
+        "run_id": run_id,
+        "mode": "walk_forward",
+        "equity_note": (
+            "Folds are independent evaluations (fresh portfolio each fold). "
+            "ending_equity = starting_capital + sum(per-fold net PnL), "
+            "NOT a compounded equity curve."
+        ),
+        "symbol": cfg["symbol"],
+        "timeframe": cfg["timeframe"],
+        "n_bars": len(clean_df),
+        "n_bars_tested": sum(f["test_bars"] for f in fold_results),
+        "start_ts": clean_df["time"].iloc[0].isoformat(),
+        "end_ts": clean_df["time"].iloc[-1].isoformat(),
+        "starting_capital": starting_capital,
+        "ending_equity": starting_capital + total_net_pnl,
+        "n_folds": len(folds),
+        "n_trades": total_trades,
+        "total_pnl": total_net_pnl,
+        "win_rate": overall_win_rate,
+        "average_win": avg_win,
+        "average_loss": avg_loss,
+        "total_gross_pnl": total_gross_pnl,
+        "total_net_pnl": total_net_pnl,
+        "total_cost_pnl": total_cost_pnl,
+        "avg_cost_per_trade": total_cost_pnl / max(1, total_trades),
+        "cost_as_pct_of_gross_abs": (
+            total_cost_pnl / max(1e-12, abs(total_gross_pnl)) * 100
+        ),
+        "worst_drawdown_pct": worst_dd,
+        "max_drawdown_pct": worst_dd,
+        "git_commit": git["git_commit"],
+        "git_dirty": git["git_dirty"],
+    }
+
+    # ── Write standard artifacts via combined engine ──
+    artifact_strategy, _ = build_strategy(cfg["strategy"])
+    artifact_rm = RiskManager(risk_config, starting_capital)
+    combined_engine = TradingEngine(
+        artifact_strategy, artifact_rm, starting_capital, position_size, cost_config,
+    )
+    combined_engine.equity_records = all_equity_records
+    combined_engine.all_fills = all_fills
+
+    _write_artifacts(
+        run_dir, cfg_path, combined_engine, clean_df, csv_files,
+        cfg, metrics, artifact_strategy, config_path_str,
+    )
+
+    # Append walk-forward specific notes to README
+    wf_note = (
+        f"\nWalk-forward: {len(folds)} folds ({splitter.mode}, "
+        f"train={splitter.train_size}, test={splitter.test_size}, "
+        f"step={splitter.step})\n"
+        "Equity note: folds are independent evaluations (fresh portfolio each fold).\n"
+        "equity.csv contains per-fold curves concatenated, NOT a single continuous curve.\n"
+        "See fold_metrics.json for per-fold breakdown.\n"
+    )
+    readme_path = run_dir / "README.md"
+    with open(readme_path, "a", encoding="utf-8") as f:
+        f.write(wf_note)
+
+    log.info("Walk-forward run complete: %s (%d folds)", run_dir, len(folds))
+    return run_id
+
+
 # ── PUBLIC ENTRY POINT ───────────────────────────────────────────────────────
 
 
@@ -407,6 +644,26 @@ def run_backtest(config_path: str) -> str:
     if len(X) != len(clean_df):
         raise ValueError("Feature DataFrame length mismatch")
     log.info("Features computed: %s", list(X.columns))
+
+    # ── WALK-FORWARD CHECK ──
+    # Features are computed once on the full dataset above.  This is safe
+    # because FeaturePipeline uses only causal (backward-looking) operations
+    # — see test_feature_pipeline_causality for the regression guard.
+    validation_cfg = cfg.get("validation")
+    if validation_cfg is not None and validation_cfg.get("type") == "walk_forward":
+        return _run_walk_forward(
+            cfg=cfg,
+            cfg_path=cfg_path,
+            config_path_str=config_path,
+            clean_df=clean_df,
+            features=X,
+            csv_files=csv_files,
+            risk_config=risk_config,
+            cost_config=cost_config,
+            git=git,
+            run_id=run_id,
+            run_dir=run_dir,
+        )
 
     # ── 6. REPLAY (model → signal → decision → execution, per bar) ──
     starting_capital: float = cfg["starting_capital"]

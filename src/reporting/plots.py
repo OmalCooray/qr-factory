@@ -102,3 +102,41 @@ def plot_gross_vs_net_equity(df: pd.DataFrame, out_path: str | Path) -> None:
     plt.close(fig)
 
     log.info("Saved gross-vs-net equity plot → %s", out_path)
+
+
+def plot_fold_pnl(fold_results: list[dict], out_path: str | Path) -> None:
+    """Bar chart of gross vs net PnL per fold.
+
+    Parameters
+    ----------
+    fold_results : list[dict]
+        Each dict must have ``fold_id``, ``gross_pnl``, ``net_pnl``.
+    out_path : str | Path
+        Destination file path.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fold_ids = [f["fold_id"] for f in fold_results]
+    gross = [f["gross_pnl"] for f in fold_results]
+    net = [f["net_pnl"] for f in fold_results]
+
+    x = range(len(fold_ids))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.bar([i - width / 2 for i in x], gross, width, label="Gross PnL", color="#3498db")
+    ax.bar([i + width / 2 for i in x], net, width, label="Net PnL", color="#e74c3c")
+    ax.axhline(0, color="black", linewidth=0.8, linestyle="-")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels([f"F{fid}" for fid in fold_ids])
+    ax.set_xlabel("Fold")
+    ax.set_ylabel("PnL")
+    ax.set_title("Walk-Forward: Gross vs Net PnL per Fold")
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+
+    log.info("Saved fold PnL plot → %s", out_path)
