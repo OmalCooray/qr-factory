@@ -3,19 +3,32 @@ timeframe: "M5"
 snapshot_dir: "data/20260217_030324"
 starting_capital: 1000.0
 output_dir: "runs"
-daily_drawdown_pct: 3.0
-monthly_drawdown_pct: 7.0
 
 strategy:
-  type: "ma_crossover"
-  indicator_type: "ema"
-  fast_period: 50
-  slow_period: 200
+  type: ml_prob_threshold
+  p_enter: 0.55
+  p_exit: 0.45
+  min_hold_bars: 5
+  fast_period: 5
+  slow_period: 10
 
 execution:
   spread_points: 40
   slippage_points: 10
   point_value: 0.01
+
+label:
+  type: return_sign_cost_aware
+  horizon: 5
+  price_col: close
+  cost_buffer: 0.0003
+  direction: up
+
+model:
+  type: logistic
+  C: 1.0
+  max_iter: 200
+  class_weight: balanced
 
 validation:
   type: walk_forward

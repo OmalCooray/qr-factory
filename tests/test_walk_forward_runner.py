@@ -294,8 +294,8 @@ class TestWalkForwardEquitySemantics:
 
         metrics = json.loads((run_dir / "metrics.json").read_text())
         assert "equity_note" in metrics
-        assert "independent" in metrics["equity_note"].lower()
-        assert "NOT" in metrics["equity_note"]
+        assert "carryover" in metrics["equity_note"].lower()
+        assert "continuous" in metrics["equity_note"].lower()
 
     def test_readme_has_walk_forward_note(self, tmp_path):
         config_path = _make_config(tmp_path, validation={
@@ -311,5 +311,55 @@ class TestWalkForwardEquitySemantics:
 
         readme = (run_dir / "README.md").read_text()
         assert "Walk-forward" in readme
-        assert "independent" in readme.lower()
+        assert "carries over" in readme.lower()
         assert "fold_metrics.json" in readme
+
+
+class TestWalkForwardCapitalCarryover:
+    """Verify that ending equity from fold N carries to fold N+1."""
+
+    def test_equity_capital_carryover(self, tmp_path):
+        """Equity is continuous across folds — no reset to starting_capital."""
+        config_path = _make_config(tmp_path, n_bars=1000, validation={
+            "type": "walk_forward",
+            "mode": "expanding",
+            "train_size": 500,
+            "test_size": 100,
+            "step": 100,
+        })
+
+        run_id = run_backtest(config_path)
+        run_dir = tmp_path / "runs" / run_id
+
+        # Read fold_metrics for per-fold starting/ending capital
+        fm = json.loads((run_dir / "fold_metrics.json").read_text())
+        folds = fm["folds"]
+        assert len(folds) >= 2, "Need at least 2 folds"
+
+        starting_capital = 10000.0
+
+        # First fold starts at starting_capital
+        assert folds[0]["starting_capital"] == starting_capital
+
+        # Each subsequent fold starts where the previous one ended
+        for i in range(1, len(folds)):
+            assert folds[i]["starting_capital"] == pytest.approx(
+                folds[i - 1]["ending_equity"]
+            ), (
+                f"Fold {i} starting_capital ({folds[i]['starting_capital']}) "
+                f"!= fold {i-1} ending_equity ({folds[i-1]['ending_equity']})"
+            )
+
+        # equity.csv should have no sudden resets to starting_capital
+        # (except possibly the very first row)
+        equity_df = pd.read_csv(run_dir / "equity.csv")
+        equity_vals = equity_df["equity"].values
+
+        # No equity value should equal starting_capital after the first fold
+        # unless the strategy truly happened to land there (extremely unlikely
+        # with oscillating synthetic data). We check that the transition
+        # between folds is smooth by verifying the aggregate ending_equity.
+        metrics = json.loads((run_dir / "metrics.json").read_text())
+        assert metrics["ending_equity"] == pytest.approx(
+            folds[-1]["ending_equity"]
+        )

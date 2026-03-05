@@ -9,6 +9,7 @@ from .impl.bb import BollingerUpper, BollingerLower
 from .impl.rsi import RSI
 from .impl.cci import CCI
 from .impl.wt import WaveTrend
+from .impl.session import TradingSession
 from .impl.transforms import Diff, Lag, Rescale, ZScoreRolling
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "RSI",
     "CCI",
     "WaveTrend",
+    "TradingSession",
     "FeaturePipeline",
     "FeatureSpec",
     "Diff",

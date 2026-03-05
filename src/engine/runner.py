@@ -381,12 +381,10 @@ def _run_walk_forward(
     Each fold gets a fresh strategy and engine.  Only the test slice is traded.
     The training slice exists for future ML model fitting.
 
-    **Equity semantics:** folds are independent evaluations — each fold starts
-    with a fresh portfolio at ``starting_capital``.  The aggregate
-    ``ending_equity`` reported in metrics.json equals
-    ``starting_capital + sum(per-fold net PnL)``; it is *not* a compounded
-    equity curve.  Stitching folds into one continuous curve requires an
-    explicit capital-carryover policy (not implemented here).
+    **Equity semantics — capital carryover:** ending equity from fold *N*
+    becomes the starting capital for fold *N+1*.  This produces a single
+    continuous compounded equity curve across all folds.  The aggregate
+    ``ending_equity`` in metrics.json is the final fold's ending equity.
 
     **Feature causality assumption:** ``features`` are pre-computed on the
     full dataset *before* splitting.  This is safe only if every indicator
@@ -419,6 +417,7 @@ def _run_walk_forward(
     fold_results: list[dict[str, Any]] = []
     all_equity_records: list[dict] = []
     all_fills: list = []
+    fold_capital = starting_capital  # carryover: fold N+1 starts where fold N ended
 
     for fold_id, (train_idx, test_idx) in enumerate(folds):
         assert train_idx[-1] < test_idx[0], (
@@ -440,16 +439,66 @@ def _run_walk_forward(
             len(test_idx),
         )
 
-        # Fresh strategy + engine per fold (no state carryover)
+        # Fresh strategy + engine per fold (capital carries over)
+        fold_starting_capital = fold_capital
         strategy, _ = build_strategy(cfg["strategy"])
-        risk_manager = RiskManager(risk_config, starting_capital)
+        risk_manager = RiskManager(risk_config, fold_capital)
         engine = TradingEngine(
-            strategy, risk_manager, starting_capital, position_size, cost_config,
+            strategy, risk_manager, fold_capital, position_size, cost_config,
         )
 
         # Run replay on test slice only
         test_bars = clean_df.iloc[test_start:test_end]
         test_features = features.iloc[test_start:test_end]
+
+        # ── Optional ML path ──
+        ml_cfg = cfg.get("model")
+        label_cfg = cfg.get("label")
+        if ml_cfg is not None:
+            from src.ml.frame import build_forecast_frame
+            from src.ml.predictor import build_predictor
+
+            train_start = int(train_idx[0])
+            train_end = int(train_idx[-1]) + 1
+            train_bars = clean_df.iloc[train_start:train_end]
+            train_features = features.iloc[train_start:train_end]
+
+            train_ff = build_forecast_frame(train_bars, train_features, label_cfg)
+            test_ff = build_forecast_frame(test_bars, test_features, label_cfg)
+
+            predictor = build_predictor(ml_cfg)
+            predictor.fit(train_ff)
+            yhat = predictor.predict(test_ff)
+
+            # ── Per-fold ML metrics ──
+            y_true = test_ff["y"].values
+            y_prob = yhat.reindex(test_ff.index).values
+            brier = float(np.mean((y_prob - y_true) ** 2))
+
+            try:
+                from sklearn.metrics import log_loss as sk_log_loss
+                ll = float(sk_log_loss(y_true, y_prob))
+            except Exception:
+                ll = None
+
+            ml_fold_metrics: dict[str, Any] = {
+                "brier": brier,
+                "n_train_rows": len(train_ff),
+                "n_test_rows": len(test_ff),
+            }
+            if ll is not None:
+                ml_fold_metrics["log_loss"] = ll
+
+            # Inject predictions into features so strategy sees ctx.features["yhat"]
+            test_features = test_features.copy()
+            test_features["yhat"] = np.nan
+            test_features.loc[yhat.index, "yhat"] = yhat
+
+            log.info(
+                "    ML: predictor=%s, train_ff=%d rows, test_ff=%d rows, yhat=%d",
+                ml_cfg.get("type", "?"), len(train_ff), len(test_ff), len(yhat),
+            )
+
         _run_replay(engine, test_bars, test_features)
 
         # ── Per-fold metrics ──
@@ -462,24 +511,31 @@ def _run_walk_forward(
         ending_equity = (
             float(eq_df["equity"].iloc[-1])
             if not eq_df.empty
-            else starting_capital
+            else fold_capital
         )
         win_rate = float((trades_df["pnl"] > 0).mean()) if n_trades > 0 else 0.0
 
-        fold_results.append({
+        fold_result = {
             "fold_id": fold_id,
             "train_start": int(train_idx[0]),
             "train_end": int(train_idx[-1]),
             "test_start": test_start,
             "test_end": int(test_idx[-1]),
             "test_bars": len(test_idx),
+            "starting_capital": fold_starting_capital,
             "n_trades": n_trades,
             "gross_pnl": gross_pnl,
             "net_pnl": net_pnl,
             "max_drawdown_pct": max_dd,
             "ending_equity": ending_equity,
             "win_rate": win_rate,
-        })
+        }
+
+        # Carry ending equity to next fold
+        fold_capital = ending_equity
+        if ml_cfg is not None:
+            fold_result.update(ml_fold_metrics)
+        fold_results.append(fold_result)
 
         all_equity_records.extend(engine.equity_records)
         all_fills.extend(engine.all_fills)
@@ -509,6 +565,14 @@ def _run_walk_forward(
         "overall_win_rate": overall_win_rate,
     }
 
+    # ── Aggregate ML metrics ──
+    if any("brier" in f for f in fold_results):
+        brier_vals = [f["brier"] for f in fold_results if "brier" in f]
+        aggregate["avg_brier"] = float(np.mean(brier_vals))
+        ll_vals = [f["log_loss"] for f in fold_results if "log_loss" in f]
+        if ll_vals:
+            aggregate["avg_log_loss"] = float(np.mean(ll_vals))
+
     # ── Write fold_metrics.json ──
     fold_output = {"folds": fold_results, "aggregate": aggregate}
     (run_dir / "fold_metrics.json").write_text(
@@ -535,9 +599,8 @@ def _run_walk_forward(
         "run_id": run_id,
         "mode": "walk_forward",
         "equity_note": (
-            "Folds are independent evaluations (fresh portfolio each fold). "
-            "ending_equity = starting_capital + sum(per-fold net PnL), "
-            "NOT a compounded equity curve."
+            "Capital carryover: ending equity from fold N becomes starting "
+            "capital for fold N+1, producing a continuous compounded equity curve."
         ),
         "symbol": cfg["symbol"],
         "timeframe": cfg["timeframe"],
@@ -546,7 +609,7 @@ def _run_walk_forward(
         "start_ts": clean_df["time"].iloc[0].isoformat(),
         "end_ts": clean_df["time"].iloc[-1].isoformat(),
         "starting_capital": starting_capital,
-        "ending_equity": starting_capital + total_net_pnl,
+        "ending_equity": fold_capital,
         "n_folds": len(folds),
         "n_trades": total_trades,
         "total_pnl": total_net_pnl,
@@ -565,6 +628,14 @@ def _run_walk_forward(
         "git_commit": git["git_commit"],
         "git_dirty": git["git_dirty"],
     }
+
+    # ── ML note ──
+    ml_cfg = cfg.get("model")
+    label_cfg = cfg.get("label")
+    if ml_cfg is not None and label_cfg is not None:
+        metrics["ml_note"] = (
+            f"label={label_cfg.get('type')}, model={ml_cfg.get('type')}"
+        )
 
     # ── Write standard artifacts via combined engine ──
     artifact_strategy, _ = build_strategy(cfg["strategy"])
@@ -585,8 +656,7 @@ def _run_walk_forward(
         f"\nWalk-forward: {len(folds)} folds ({splitter.mode}, "
         f"train={splitter.train_size}, test={splitter.test_size}, "
         f"step={splitter.step})\n"
-        "Equity note: folds are independent evaluations (fresh portfolio each fold).\n"
-        "equity.csv contains per-fold curves concatenated, NOT a single continuous curve.\n"
+        "Equity note: capital carries over across folds (continuous compounded curve).\n"
         "See fold_metrics.json for per-fold breakdown.\n"
     )
     readme_path = run_dir / "README.md"

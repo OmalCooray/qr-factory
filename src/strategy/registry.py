@@ -50,6 +50,7 @@ from .lorentzian_classification import build as _build_lorentzian  # noqa: E402
 from .rsi_bb_confluence import build as _build_rsi_bb  # noqa: E402
 from .bb_mean_reversion import build as _build_bb_mr  # noqa: E402
 from .graph_mss import build as _build_graph_mss  # noqa: E402
+from .ml_prob_threshold import build as _build_ml_prob  # noqa: E402
 
 register("ma_crossover", _build_ma)
 register("adx_filtered", _build_adx)
@@ -58,3 +59,4 @@ register("lorentzian_classification", _build_lorentzian)
 register("rsi_bb_confluence", _build_rsi_bb)
 register("bb_mean_reversion", _build_bb_mr)
 register("graph_mss", _build_graph_mss)
+register("ml_prob_threshold", _build_ml_prob)

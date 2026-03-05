@@ -7,6 +7,7 @@ from .lorentzian_classification import LorentzianClassificationStrategy
 from .rsi_bb_confluence import RSIBBConfluenceStrategy
 from .bb_mean_reversion import BBMeanReversionStrategy
 from .graph_mss import GraphMarketStructureStrategy
+from .ml_prob_threshold import MLProbThresholdStrategy
 from .registry import build_strategy, register
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "RSIBBConfluenceStrategy",
     "BBMeanReversionStrategy",
     "GraphMarketStructureStrategy",
+    "MLProbThresholdStrategy",
     "build_strategy",
     "register",
 ]
