@@ -39,6 +39,7 @@ class SklearnLogisticPredictor:
         class_weight: str = "balanced",
         solver: str = "lbfgs",
         scale: bool = False,
+        random_state: int = 0,
     ) -> None:
         from sklearn.linear_model import LogisticRegression
 
@@ -47,7 +48,7 @@ class SklearnLogisticPredictor:
             max_iter=max_iter,
             class_weight=class_weight,
             solver=solver,
-            random_state=0,
+            random_state=random_state,
         )
         self._scale = scale
         self._scaler = None

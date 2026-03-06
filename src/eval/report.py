@@ -10,6 +10,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+import yaml  # noqa: E402
 
 from ._formatting import fmt as _fmt  # noqa: E402
 
@@ -152,6 +153,44 @@ def generate_report(
     if meta.get("is_walk_forward"):
         lines.append(f"- **Walk-Forward**: {meta.get('n_folds', '?')} folds")
     lines.append(f"- **Git**: {meta.get('git_commit', 'N/A')} (dirty={meta.get('git_dirty', 'N/A')})")
+    lines.append("")
+
+    # 1b. Strategy & Label Config (policy observability)
+    cfg_path = run_dir / "config.yaml"
+    if cfg_path.exists():
+        run_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    else:
+        run_cfg = {}
+
+    lines.append("## Strategy & Label Config")
+    lines.append("")
+
+    strat_cfg = run_cfg.get("strategy", {})
+    if strat_cfg:
+        lines.append(f"- **Strategy type**: {strat_cfg.get('type', 'N/A')}")
+        for key in ("p_enter", "p_exit", "min_hold_bars"):
+            if key in strat_cfg:
+                lines.append(f"- **{key}**: {strat_cfg[key]}")
+        feat_list = strat_cfg.get("features", [])
+        if feat_list:
+            lines.append(f"- **Features**: {len(feat_list)} indicators")
+
+    label_cfg = run_cfg.get("label", {})
+    if label_cfg:
+        lines.append(f"- **Label type**: {label_cfg.get('type', 'N/A')}")
+        for key in ("horizon", "cost_buffer", "direction"):
+            if key in label_cfg:
+                lines.append(f"- **label.{key}**: {label_cfg[key]}")
+
+    model_cfg = run_cfg.get("model", {})
+    if model_cfg:
+        lines.append(f"- **Model type**: {model_cfg.get('type', 'N/A')}")
+        for key, val in model_cfg.items():
+            if key != "type":
+                lines.append(f"- **model.{key}**: {val}")
+
+    if not strat_cfg and not label_cfg and not model_cfg:
+        lines.append("N/A — no config.yaml found.")
     lines.append("")
 
     # 2. Costs & Friction

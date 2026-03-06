@@ -1,0 +1,86 @@
+# Canonical LightGBM ablation — paired with w4_logistic_baseline.yaml
+# Controlled ablation: only the model block differs.
+# All other fields (data, features, label, execution, validation) are identical.
+symbol: "XAUUSD"
+timeframe: "M5"
+snapshot_dir: "data/20260217_030324"
+starting_capital: 1000.0
+output_dir: "runs"
+
+strategy:
+  type: ml_prob_threshold
+  p_enter: 0.60
+  p_exit: 0.45
+  min_hold_bars: 12
+  features:
+    - type: ema
+      period: 5
+      transforms:
+        - type: zscore
+          window: 20
+    - type: sma
+      period: 10
+      transforms:
+        - type: zscore
+          window: 20
+    - type: atr
+      period: 14
+      transforms:
+        - type: zscore
+          window: 20
+    - type: rsi
+      period: 14
+      transforms:
+        - type: zscore
+          window: 20
+    - type: adx
+      period: 14
+      transforms:
+        - type: zscore
+          window: 20
+    - type: bb_upper
+      period: 20
+      transforms:
+        - type: zscore
+          window: 20
+    - type: bb_lower
+      period: 20
+      transforms:
+        - type: zscore
+          window: 20
+    - type: cci
+      period: 20
+      transforms:
+        - type: zscore
+          window: 20
+
+execution:
+  spread_points: 40
+  slippage_points: 10
+  point_value: 0.01
+
+label:
+  type: return_sign_cost_aware
+  horizon: 12
+  price_col: close
+  cost_buffer: 0.0005
+  direction: up
+
+model:
+  type: lightgbm
+  n_estimators: 300
+  learning_rate: 0.05
+  max_depth: 5
+  min_child_samples: 50
+  subsample: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+  random_state: 0
+
+validation:
+  type: walk_forward
+  mode: expanding
+  train_size: 100000
+  test_size: 50000
+  step: 50000
+  drop_last: true

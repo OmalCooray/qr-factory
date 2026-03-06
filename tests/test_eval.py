@@ -153,6 +153,7 @@ def _make_synthetic_run(
     win_rate: float,
     roc_auc: float | None = None,
     brier: float | None = None,
+    config_overrides: dict | None = None,
 ) -> Path:
     """Create a minimal synthetic run directory for comparison tests."""
     run_dir = tmp_path / run_name
@@ -162,7 +163,28 @@ def _make_synthetic_run(
     starting_capital = 10000.0
     ending_equity = starting_capital + net_pnl
 
-    config = {"strategy": {"type": "test_strat"}, "starting_capital": starting_capital}
+    config = {
+        "strategy": {"type": "test_strat"},
+        "starting_capital": starting_capital,
+        "symbol": "XAUUSD",
+        "timeframe": "M5",
+        "snapshot_dir": "data/20260217_030324",
+        "execution": {
+            "spread_points": 40,
+            "slippage_points": 10,
+            "point_value": 0.01,
+        },
+        "validation": {
+            "type": "walk_forward",
+            "mode": "expanding",
+            "train_size": 100000,
+            "test_size": 50000,
+            "step": 50000,
+            "drop_last": True,
+        },
+    }
+    if config_overrides:
+        config.update(config_overrides)
     (run_dir / "config.yaml").write_text(yaml.dump(config), encoding="utf-8")
 
     metrics = {
@@ -494,3 +516,169 @@ class TestWalkForwardReportCaveats:
         content = report_path.read_text(encoding="utf-8")
         assert "continuous compounded equity curve" in content
         assert "Prediction metrics are pooled" in content
+
+
+# ── Config Match Tests ─────────────────────────────────────────────────────
+
+
+class TestConfigMatch:
+    """Tests for _check_config_match()."""
+
+    def test_matched_configs_return_no_warnings(self, tmp_path):
+        from src.eval.comparison import _check_config_match
+
+        run_a = _make_synthetic_run(tmp_path, "match_a", net_pnl=100.0, win_rate=0.5)
+        run_b = _make_synthetic_run(tmp_path, "match_b", net_pnl=200.0, win_rate=0.5)
+
+        matched, warnings = _check_config_match([run_a, run_b])
+        assert matched is True
+        assert warnings == []
+
+    def test_mismatched_snapshot_detected(self, tmp_path):
+        from src.eval.comparison import _check_config_match
+
+        run_a = _make_synthetic_run(tmp_path, "snap_a", net_pnl=100.0, win_rate=0.5)
+        run_b = _make_synthetic_run(
+            tmp_path, "snap_b", net_pnl=200.0, win_rate=0.5,
+            config_overrides={"snapshot_dir": "data/different_snapshot"},
+        )
+
+        matched, warnings = _check_config_match([run_a, run_b])
+        assert matched is False
+        assert any("snapshot_dir" in w for w in warnings)
+
+    def test_mismatched_execution_detected(self, tmp_path):
+        from src.eval.comparison import _check_config_match
+
+        run_a = _make_synthetic_run(tmp_path, "exec_a", net_pnl=100.0, win_rate=0.5)
+        run_b = _make_synthetic_run(
+            tmp_path, "exec_b", net_pnl=200.0, win_rate=0.5,
+            config_overrides={"execution": {"spread_points": 80, "slippage_points": 10, "point_value": 0.01}},
+        )
+
+        matched, warnings = _check_config_match([run_a, run_b])
+        assert matched is False
+        assert any("spread_points" in w for w in warnings)
+
+    def test_mismatched_label_detected(self, tmp_path):
+        from src.eval.comparison import _check_config_match
+
+        label_a = {"type": "return_sign_cost_aware", "horizon": 12, "price_col": "close", "direction": "up"}
+        label_b = {"type": "return_sign_cost_aware", "horizon": 6, "price_col": "close", "direction": "up"}
+        run_a = _make_synthetic_run(
+            tmp_path, "lbl_a", net_pnl=100.0, win_rate=0.5,
+            config_overrides={"label": label_a},
+        )
+        run_b = _make_synthetic_run(
+            tmp_path, "lbl_b", net_pnl=200.0, win_rate=0.5,
+            config_overrides={"label": label_b},
+        )
+
+        matched, warnings = _check_config_match([run_a, run_b])
+        assert matched is False
+        assert any("label.horizon" in w for w in warnings)
+
+    def test_label_skipped_when_one_run_has_no_label(self, tmp_path):
+        """Rule vs ML: rule has no label block — no label mismatch warnings."""
+        from src.eval.comparison import _check_config_match
+
+        run_a = _make_synthetic_run(tmp_path, "nolbl_a", net_pnl=100.0, win_rate=0.5)
+        run_b = _make_synthetic_run(
+            tmp_path, "nolbl_b", net_pnl=200.0, win_rate=0.5,
+            config_overrides={"label": {"type": "return_sign_cost_aware", "horizon": 12}},
+        )
+
+        matched, warnings = _check_config_match([run_a, run_b])
+        assert matched is True
+        assert not any("label" in w for w in warnings)
+
+
+# ── Auto-Conclusion Tests ──────────────────────────────────────────────────
+
+
+class TestAutoConclusion:
+    """Tests for auto-generated conclusions in comparison.md."""
+
+    def test_conclusion_present_in_comparison_md(self, tmp_path):
+        from src.eval.comparison import compare_runs
+
+        run_a = _make_synthetic_run(
+            tmp_path, "concl_a", net_pnl=-500.0, win_rate=0.4, roc_auc=0.85,
+        )
+        run_b = _make_synthetic_run(
+            tmp_path, "concl_b", net_pnl=2000.0, win_rate=0.6, roc_auc=0.51,
+        )
+
+        out_dir = tmp_path / "concl_out"
+        compare_runs([run_a, run_b], out_dir)
+
+        md = (out_dir / "comparison.md").read_text(encoding="utf-8")
+        assert "## Conclusion" in md
+        assert "1. **What changed:**" in md
+
+    def test_conclusion_handles_no_predictions(self, tmp_path):
+        from src.eval.comparison import compare_runs
+
+        run_a = _make_synthetic_run(tmp_path, "nopred_a", net_pnl=100.0, win_rate=0.5)
+        run_b = _make_synthetic_run(tmp_path, "nopred_b", net_pnl=200.0, win_rate=0.55)
+
+        out_dir = tmp_path / "nopred_out"
+        compare_runs([run_a, run_b], out_dir)
+
+        md = (out_dir / "comparison.md").read_text(encoding="utf-8")
+        assert "## Conclusion" in md
+        assert "1. **What changed:**" in md
+
+
+# ── Policy Observability Tests ─────────────────────────────────────────────
+
+
+class TestPolicyObservability:
+    """Tests for strategy/label/model config section in report.md."""
+
+    def test_report_includes_strategy_config(self, tmp_path):
+        from dataclasses import asdict
+
+        from src.eval.aggregator import evaluate_run
+        from src.eval.artifacts import load_run_artifacts
+        from src.eval.report import generate_report
+
+        run_dir = _make_synthetic_run(
+            tmp_path, "pol_ml", net_pnl=300.0, win_rate=0.52,
+            config_overrides={
+                "strategy": {"type": "ml_prob_threshold", "p_enter": 0.6, "p_exit": 0.45},
+                "label": {"type": "return_sign_cost_aware", "horizon": 12},
+                "model": {"type": "logistic", "C": 1.0},
+            },
+        )
+        result = evaluate_run(run_dir)
+        artifacts = load_run_artifacts(run_dir)
+        report_path = generate_report(
+            run_dir, asdict(result), artifacts.equity, artifacts.equity_gross,
+        )
+        content = report_path.read_text(encoding="utf-8")
+        assert "## Strategy & Label Config" in content
+        assert "ml_prob_threshold" in content
+        assert "p_enter" in content
+        assert "logistic" in content
+
+    def test_report_handles_rule_based(self, tmp_path):
+        from dataclasses import asdict
+
+        from src.eval.aggregator import evaluate_run
+        from src.eval.artifacts import load_run_artifacts
+        from src.eval.report import generate_report
+
+        run_dir = _make_synthetic_run(
+            tmp_path, "pol_rule", net_pnl=200.0, win_rate=0.5,
+        )
+        result = evaluate_run(run_dir)
+        artifacts = load_run_artifacts(run_dir)
+        report_path = generate_report(
+            run_dir, asdict(result), artifacts.equity, artifacts.equity_gross,
+        )
+        content = report_path.read_text(encoding="utf-8")
+        assert "## Strategy & Label Config" in content
+        # Rule-based: no label or model sections
+        assert "Label type" not in content
+        assert "Model type" not in content
