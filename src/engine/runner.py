@@ -417,6 +417,7 @@ def _run_walk_forward(
     fold_results: list[dict[str, Any]] = []
     all_equity_records: list[dict] = []
     all_fills: list = []
+    all_predictions: list[pd.DataFrame] = []
     fold_capital = starting_capital  # carryover: fold N+1 starts where fold N ended
 
     for fold_id, (train_idx, test_idx) in enumerate(folds):
@@ -494,6 +495,15 @@ def _run_walk_forward(
             test_features["yhat"] = np.nan
             test_features.loc[yhat.index, "yhat"] = yhat
 
+            # Persist per-fold predictions for evaluation
+            pred_records = pd.DataFrame({
+                "fold_id": fold_id,
+                "timestamp": [clean_df["time"].iloc[idx].isoformat() for idx in test_ff.index],
+                "y_true": y_true,
+                "y_prob": y_prob,
+            })
+            all_predictions.append(pred_records)
+
             log.info(
                 "    ML: predictor=%s, train_ff=%d rows, test_ff=%d rows, yhat=%d",
                 ml_cfg.get("type", "?"), len(train_ff), len(test_ff), len(yhat),
@@ -539,6 +549,13 @@ def _run_walk_forward(
 
         all_equity_records.extend(engine.equity_records)
         all_fills.extend(engine.all_fills)
+
+    # ── Concatenate predictions into single predictions.csv ──
+    if all_predictions:
+        pd.concat(all_predictions, ignore_index=True).to_csv(
+            run_dir / "predictions.csv", index=False,
+        )
+        log.info("Wrote predictions.csv (%d rows)", sum(len(d) for d in all_predictions))
 
     # ── Aggregate across folds ──
     total_trades = sum(f["n_trades"] for f in fold_results)

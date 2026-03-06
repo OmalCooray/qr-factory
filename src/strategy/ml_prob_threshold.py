@@ -16,7 +16,7 @@ from src.indicators.impl.ema import EMA
 from src.indicators.impl.ma import SMA
 from src.indicators.impl.rsi import RSI
 from src.indicators.impl.session import TradingSession
-from src.indicators.impl.transforms import ZScoreRolling
+from src.indicators.impl.transforms import Diff, Lag, ZScoreRolling
 from src.strategy.base import StrategyContext
 from src.strategy.signal import Signal
 
@@ -37,6 +37,8 @@ _INDICATOR_MAP: dict[str, callable] = {
 
 _TRANSFORM_MAP: dict[str, callable] = {
     "zscore": lambda p: ZScoreRolling(window=p.get("window", 20)),
+    "diff": lambda p: Diff(k=p.get("k", 1)),
+    "lag": lambda p: Lag(k=p.get("k", 1)),
 }
 
 

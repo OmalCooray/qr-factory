@@ -5,28 +5,15 @@ starting_capital: 1000.0
 output_dir: "runs"
 
 strategy:
-  type: ml_prob_threshold
-  p_enter: 0.55
+  type: ma_crossover
   fast_period: 5
   slow_period: 10
+  indicator_type: ema
 
 execution:
   spread_points: 40
   slippage_points: 10
   point_value: 0.01
-
-label:
-  type: return_sign_cost_aware
-  horizon: 5
-  price_col: close
-  cost_buffer: 0.0003
-  direction: up
-
-model:
-  type: logistic
-  C: 1.0
-  max_iter: 200
-  class_weight: balanced
 
 validation:
   type: walk_forward

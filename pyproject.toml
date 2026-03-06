@@ -13,6 +13,8 @@ dependencies = [
     "ruptures>=1.1",
     "scikit-learn>=1.4",
     "statsmodels>=0.14",
+    "xgboost>=2.0",
+    "lightgbm>=4.0",
 ]
 
 [project.scripts]

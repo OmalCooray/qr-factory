@@ -111,6 +111,90 @@ class SklearnGBClassifierPredictor:
         return pd.Series(proba, index=test_ff.index, name="yhat")
 
 
+class XGBoostPredictor:
+    """XGBoost classifier predictor.
+
+    Tree-based model — no feature scaling needed.
+    """
+
+    def __init__(
+        self,
+        n_estimators: int = 100,
+        max_depth: int = 4,
+        learning_rate: float = 0.1,
+        subsample: float = 0.8,
+        min_child_weight: int = 5,
+        random_state: int = 0,
+    ) -> None:
+        from xgboost import XGBClassifier
+
+        self._model = XGBClassifier(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            subsample=subsample,
+            min_child_weight=min_child_weight,
+            random_state=random_state,
+            eval_metric="logloss",
+        )
+        self._x_cols: list[str] = []
+
+    def fit(self, train_ff: pd.DataFrame) -> None:
+        self._x_cols = sorted(c for c in train_ff.columns if c.startswith("X_"))
+        X = train_ff[self._x_cols].values
+        y = train_ff["y"].values.astype(int)
+        self._model.fit(X, y)
+
+    def predict(self, test_ff: pd.DataFrame) -> pd.Series:
+        X = test_ff[self._x_cols].values
+        proba = self._model.predict_proba(X)[:, 1]
+        return pd.Series(proba, index=test_ff.index, name="yhat")
+
+
+class LightGBMPredictor:
+    """LightGBM classifier predictor.
+
+    Tree-based model — no feature scaling needed.
+    """
+
+    def __init__(
+        self,
+        n_estimators: int = 100,
+        max_depth: int = 4,
+        learning_rate: float = 0.1,
+        subsample: float = 0.8,
+        min_child_samples: int = 50,
+        reg_alpha: float = 0.0,
+        reg_lambda: float = 0.0,
+        random_state: int = 0,
+    ) -> None:
+        from lightgbm import LGBMClassifier
+
+        self._model = LGBMClassifier(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            subsample=subsample,
+            min_child_samples=min_child_samples,
+            reg_alpha=reg_alpha,
+            reg_lambda=reg_lambda,
+            random_state=random_state,
+            verbose=-1,
+        )
+        self._x_cols: list[str] = []
+
+    def fit(self, train_ff: pd.DataFrame) -> None:
+        self._x_cols = sorted(c for c in train_ff.columns if c.startswith("X_"))
+        X = train_ff[self._x_cols].values
+        y = train_ff["y"].values.astype(int)
+        self._model.fit(X, y)
+
+    def predict(self, test_ff: pd.DataFrame) -> pd.Series:
+        X = test_ff[self._x_cols].values
+        proba = self._model.predict_proba(X)[:, 1]
+        return pd.Series(proba, index=test_ff.index, name="yhat")
+
+
 class DummyPredictor:
     """Always-0.5 predictor for wiring tests.
 
@@ -130,6 +214,8 @@ _PREDICTOR_REGISTRY: dict[str, type] = {
     "dummy": DummyPredictor,
     "logistic": SklearnLogisticPredictor,
     "gradient_boosting": SklearnGBClassifierPredictor,
+    "xgboost": XGBoostPredictor,
+    "lightgbm": LightGBMPredictor,
 }
 
 
