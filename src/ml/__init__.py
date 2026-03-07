@@ -1,3 +1,4 @@
+from src.ml.calibration import PlattCalibrator
 from src.ml.frame import build_forecast_frame
 from src.ml.predictor import (
     DummyPredictor,
@@ -11,6 +12,7 @@ from src.ml.predictor import (
 
 __all__ = [
     "build_forecast_frame",
+    "PlattCalibrator",
     "Predictor",
     "DummyPredictor",
     "SklearnLogisticPredictor",

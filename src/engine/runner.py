@@ -467,9 +467,42 @@ def _run_walk_forward(
             train_ff = build_forecast_frame(train_bars, train_features, label_cfg)
             test_ff = build_forecast_frame(test_bars, test_features, label_cfg)
 
-            predictor = build_predictor(ml_cfg)
-            predictor.fit(train_ff)
-            yhat = predictor.predict(test_ff)
+            # ── Calibration path ──
+            cal_cfg = cfg.get("calibration", {})
+            cal_method = cal_cfg.get("method", "none")
+            cal_active = cal_method != "none"
+
+            if cal_active:
+                from src.ml.calibration import PlattCalibrator
+
+                cal_fraction = cal_cfg.get("cal_fraction", 0.2)
+                n_train = len(train_ff)
+                n_model_train = int(n_train * (1 - cal_fraction))
+                model_train = train_ff.iloc[:n_model_train]
+                cal_slice = train_ff.iloc[n_model_train:]
+
+                # Fit predictor on model_train only
+                predictor = build_predictor(ml_cfg)
+                predictor.fit(model_train)
+
+                # Fit calibrator on cal_slice
+                cal_raw_probs = predictor.predict(cal_slice)
+                calibrator = PlattCalibrator()
+                calibrator.fit(cal_raw_probs.values, cal_slice["y"].values)
+
+                # Get raw + calibrated probs on test set
+                yhat_raw = predictor.predict(test_ff)
+                yhat = calibrator.transform_series(yhat_raw)
+
+                log.info(
+                    "    Calibration: model_train=%d, cal_slice=%d, method=%s",
+                    len(model_train), len(cal_slice), cal_method,
+                )
+            else:
+                predictor = build_predictor(ml_cfg)
+                predictor.fit(train_ff)
+                yhat = predictor.predict(test_ff)
+                yhat_raw = None
 
             # ── Per-fold ML metrics ──
             y_true = test_ff["y"].values
@@ -484,11 +517,14 @@ def _run_walk_forward(
 
             ml_fold_metrics: dict[str, Any] = {
                 "brier": brier,
-                "n_train_rows": len(train_ff),
+                "n_train_rows": len(train_ff) if not cal_active else len(model_train),
                 "n_test_rows": len(test_ff),
             }
             if ll is not None:
                 ml_fold_metrics["log_loss"] = ll
+            if cal_active:
+                ml_fold_metrics["cal_n_train"] = len(model_train)
+                ml_fold_metrics["cal_n_cal"] = len(cal_slice)
 
             # Inject predictions into features so strategy sees ctx.features["yhat"]
             test_features = test_features.copy()
@@ -502,6 +538,8 @@ def _run_walk_forward(
                 "y_true": y_true,
                 "y_prob": y_prob,
             })
+            if cal_active and yhat_raw is not None:
+                pred_records["y_prob_raw"] = yhat_raw.reindex(test_ff.index).values
             all_predictions.append(pred_records)
 
             log.info(

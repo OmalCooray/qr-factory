@@ -42,7 +42,18 @@ def _cmd_evaluate_run(args: argparse.Namespace) -> None:
     )
 
     log.info("Evaluation complete: %s", run_dir)
-    log.info("  evaluation.json, report.md, plots/drawdown.png")
+    log.info("  evaluation.json, calibration.json, report.md, plots/")
+
+    if getattr(args, "mlflow", False):
+        from .mlflow_logger import log_run_to_mlflow
+
+        mlf_id = log_run_to_mlflow(
+            run_dir,
+            evaluation=asdict(result),
+            calibration=result.calibration_metrics or None,
+        )
+        if mlf_id:
+            log.info("MLflow run ID: %s", mlf_id)
 
 
 def _cmd_compare_runs(args: argparse.Namespace) -> None:
@@ -73,6 +84,7 @@ def main() -> None:
     # evaluate-run
     p_eval = sub.add_parser("evaluate-run", help="Evaluate a single run")
     p_eval.add_argument("--run_dir", required=True, help="Path to run directory")
+    p_eval.add_argument("--mlflow", action="store_true", help="Log run to MLflow (requires mlflow)")
 
     # compare-runs
     p_cmp = sub.add_parser("compare-runs", help="Compare multiple runs")

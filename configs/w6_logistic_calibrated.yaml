@@ -1,0 +1,86 @@
+# Week 6: Calibrated logistic baseline — paired with w6_logistic_uncalibrated.yaml
+# Controlled comparison: only the calibration block differs.
+# All other fields (data, features, label, execution, validation, model) are identical.
+symbol: "XAUUSD"
+timeframe: "M5"
+snapshot_dir: "data/20260217_030324"
+starting_capital: 1000.0
+output_dir: "runs"
+
+strategy:
+  type: ml_prob_threshold
+  p_enter: 0.60
+  p_exit: 0.45
+  min_hold_bars: 12
+  features:
+    - type: ema
+      period: 5
+      transforms:
+        - type: zscore
+          window: 20
+    - type: sma
+      period: 10
+      transforms:
+        - type: zscore
+          window: 20
+    - type: atr
+      period: 14
+      transforms:
+        - type: zscore
+          window: 20
+    - type: rsi
+      period: 14
+      transforms:
+        - type: zscore
+          window: 20
+    - type: adx
+      period: 14
+      transforms:
+        - type: zscore
+          window: 20
+    - type: bb_upper
+      period: 20
+      transforms:
+        - type: zscore
+          window: 20
+    - type: bb_lower
+      period: 20
+      transforms:
+        - type: zscore
+          window: 20
+    - type: cci
+      period: 20
+      transforms:
+        - type: zscore
+          window: 20
+
+execution:
+  spread_points: 40
+  slippage_points: 10
+  point_value: 0.01
+
+label:
+  type: return_sign_cost_aware
+  horizon: 12
+  price_col: close
+  cost_buffer: 0.0005
+  direction: up
+
+model:
+  type: logistic
+  C: 1.0
+  max_iter: 200
+  class_weight: balanced
+  random_state: 0
+
+calibration:
+  method: platt
+  cal_fraction: 0.2
+
+validation:
+  type: walk_forward
+  mode: expanding
+  train_size: 100000
+  test_size: 50000
+  step: 50000
+  drop_last: true

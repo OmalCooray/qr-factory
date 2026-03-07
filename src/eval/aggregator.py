@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .artifacts import RunArtifacts, load_run_artifacts
+from .calibration import write_calibration_artifacts
 from .prediction_metrics import compute_prediction_metrics
 from .trading_metrics import compute_trading_metrics
 
@@ -22,6 +23,7 @@ class EvaluationResult:
     strategy_type: str
     prediction_metrics: dict
     trading_metrics: dict
+    calibration_metrics: dict
     metadata: dict
 
 
@@ -41,6 +43,7 @@ def evaluate_run(run_dir: str | Path) -> EvaluationResult:
     artifacts = load_run_artifacts(run_dir)
 
     pred_metrics = compute_prediction_metrics(artifacts.predictions)
+    cal = write_calibration_artifacts(run_dir, artifacts.predictions)
     trade_metrics = compute_trading_metrics(
         equity=artifacts.equity,
         trades=artifacts.trades,
@@ -62,11 +65,14 @@ def evaluate_run(run_dir: str | Path) -> EvaluationResult:
         "n_folds": artifacts.metrics.get("n_folds"),
     }
 
+    cal_metrics = {"ece": cal["ece"], "brier": cal["brier"]} if cal else {}
+
     result = EvaluationResult(
         run_id=artifacts.run_id,
         strategy_type=artifacts.strategy_type,
         prediction_metrics=pred_metrics,
         trading_metrics=trade_metrics,
+        calibration_metrics=cal_metrics,
         metadata=metadata,
     )
 

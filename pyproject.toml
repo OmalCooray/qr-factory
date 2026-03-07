@@ -17,6 +17,9 @@ dependencies = [
     "lightgbm>=4.0",
 ]
 
+[project.optional-dependencies]
+tracking = ["mlflow>=2.10"]
+
 [project.scripts]
 loader = "src.loader._loader:main"
 
