@@ -9,12 +9,11 @@ from pathlib import Path
 
 import yaml
 
+from src._paths import REPO_ROOT
 from src.robustness.expand import build_scenario_configs, load_campaign_spec
 from src.robustness.manifest import write_manifest
 
 log = logging.getLogger(__name__)
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _try_mlflow_log(
@@ -65,7 +64,7 @@ def run_campaign(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     campaign_dir = (
-        _REPO_ROOT / "runs" / "robustness" / f"{campaign.campaign_id}__{timestamp}"
+        REPO_ROOT / "runs" / "robustness" / f"{campaign.campaign_id}__{timestamp}"
     )
     scenarios_dir = campaign_dir / "scenarios"
     scenarios_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +87,7 @@ def run_campaign(
     }
 
     # ── Run baseline if needed ──
-    runs_dir = _REPO_ROOT / "runs"
+    runs_dir = REPO_ROOT / "runs"
     if campaign.baseline_run_id is None and not dry_run:
         log.info("Running baseline: %s", campaign.baseline_config)
         try:
@@ -113,7 +112,7 @@ def run_campaign(
             "name": scenario.name,
             "description": scenario.description,
             "tags": list(scenario.tags),
-            "config_path": str(config_path.relative_to(_REPO_ROOT)),
+            "config_path": str(config_path.relative_to(REPO_ROOT)),
             "status": "pending",
             "run_id": None,
         }

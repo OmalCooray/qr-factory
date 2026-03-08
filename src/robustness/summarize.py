@@ -14,9 +14,9 @@ from typing import Any
 
 import pandas as pd
 
-log = logging.getLogger(__name__)
+from src._paths import REPO_ROOT
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+log = logging.getLogger(__name__)
 
 # Key trading metrics to extract per scenario
 _KEY_METRICS = [
@@ -86,7 +86,7 @@ def build_campaign_summary(campaign_dir: Path) -> Path:
     """
     manifest_path = campaign_dir / "MANIFEST.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    runs_dir = _REPO_ROOT / "runs"
+    runs_dir = REPO_ROOT / "runs"
 
     scenarios_data = manifest.get("scenarios", {})
 
@@ -166,7 +166,7 @@ def build_scenario_metrics_table(campaign_dir: Path) -> Path:
     """
     manifest_path = campaign_dir / "MANIFEST.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    runs_dir = _REPO_ROOT / "runs"
+    runs_dir = REPO_ROOT / "runs"
 
     rows: list[dict[str, Any]] = []
     for sid, entry in manifest.get("scenarios", {}).items():

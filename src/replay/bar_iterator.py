@@ -54,11 +54,12 @@ class BarIterator:
         # Sort ascending
         df = df.sort_values("time").reset_index(drop=True)
 
-        # Assert monotonic increasing (defense-in-depth; validate_bars
+        # Enforce monotonic increasing (defense-in-depth; validate_bars
         # already enforces no duplicates and correct ordering).
-        assert df["time"].is_monotonic_increasing, (
-            "Timestamps are not monotonic increasing after dedup — data integrity issue"
-        )
+        if not df["time"].is_monotonic_increasing:
+            raise ValueError(
+                "Timestamps are not monotonic increasing after dedup — data integrity issue"
+            )
 
         log.info(
             "BarIterator: %s bars, %s → %s",

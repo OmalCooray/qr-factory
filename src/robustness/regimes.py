@@ -15,9 +15,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
-log = logging.getLogger(__name__)
+from src._paths import REPO_ROOT
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+log = logging.getLogger(__name__)
 
 # ── Session definitions (UTC hour ranges) ─────────────────────────────────────
 
@@ -145,7 +145,7 @@ def _load_ohlcv(snapshot_dir: str | Path) -> pd.DataFrame:
     """Load OHLCV data from a snapshot directory (minimal loader for analysis)."""
     snapshot_dir = Path(snapshot_dir)
     if not snapshot_dir.is_absolute():
-        snapshot_dir = _REPO_ROOT / snapshot_dir
+        snapshot_dir = REPO_ROOT / snapshot_dir
 
     csv_files = sorted(snapshot_dir.glob("*.csv"))
     if not csv_files:

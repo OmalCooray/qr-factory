@@ -599,7 +599,7 @@ class TestCampaignSummary:
         """campaign_summary.json is produced with correct structure."""
         campaign_dir = self._setup_campaign_dir(tmp_path)
         monkeypatch.setattr(
-            "src.robustness.summarize._REPO_ROOT", tmp_path,
+            "src.robustness.summarize.REPO_ROOT", tmp_path,
         )
 
         path = build_campaign_summary(campaign_dir)
@@ -617,7 +617,7 @@ class TestCampaignSummary:
         """Per-scenario key metrics are populated from evaluation.json."""
         campaign_dir = self._setup_campaign_dir(tmp_path)
         monkeypatch.setattr(
-            "src.robustness.summarize._REPO_ROOT", tmp_path,
+            "src.robustness.summarize.REPO_ROOT", tmp_path,
         )
 
         build_campaign_summary(campaign_dir)
@@ -633,7 +633,7 @@ class TestCampaignSummary:
         """scenario_metrics.csv has one row per completed scenario."""
         campaign_dir = self._setup_campaign_dir(tmp_path)
         monkeypatch.setattr(
-            "src.robustness.summarize._REPO_ROOT", tmp_path,
+            "src.robustness.summarize.REPO_ROOT", tmp_path,
         )
 
         path = build_scenario_metrics_table(campaign_dir)

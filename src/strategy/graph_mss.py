@@ -101,6 +101,13 @@ class GraphMarketStructureStrategy:
             return False
         return True
 
+    def extra_artifacts(self) -> dict[str, list[dict]]:
+        """Return graph state and level records for persistence."""
+        return {
+            "graph_state": self.graph_state_records,
+            "levels": self.level_records,
+        }
+
     def on_bar(self, ctx: StrategyContext) -> Signal:
         # Append to rolling buffers
         self._opens.append(float(ctx.bar["open"]))

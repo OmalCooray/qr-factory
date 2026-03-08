@@ -138,3 +138,136 @@ As the research progresses, the architecture will evolve:
 4. **`src/execution/cost_model.py` (new)** — spread + slippage model for execution-aware backtesting
 
 Each package is created when it gains real logic, not before.
+
+## Engineering Operating Manual
+
+**This section defines strict engineering rules for all future work in this repository. Following these rules is MANDATORY.**
+
+### Core Engineering Principles
+
+1. **Minimal patch first** — Always prefer the smallest safe patch that fixes the issue. No big rewrites. No speculative cleanup.
+
+2. **Preserve determinism and reproducibility** — Same seed + config + data MUST produce same results. Do not break this under any circumstances.
+
+3. **Preserve artifact contracts** — Do not change artifact schemas (equity.csv, trades.csv, metrics.json, fold_metrics.json, predictions.csv, regime.csv, etc.) unless a bug fix explicitly requires it. Changing schemas breaks result comparisons and reproducibility.
+
+4. **Explicit exceptions, not production asserts** — Runtime correctness checks must use explicit `if` + `raise ValueError/RuntimeError`, never `assert`. Production code must work under optimized Python (`-O` flag strips asserts).
+
+5. **Typed structures over raw dicts** — Use typed dataclasses, TypedDict, or Protocols for critical structures (fold results, config validation, metrics aggregation). Avoid error-prone ad-hoc dict plumbing with string keys.
+
+6. **Centralize shared paths/constants** — Use `src/_paths.py:REPO_ROOT` for repository root. Do not duplicate path resolution logic across modules.
+
+7. **Explicit contracts, no invisible coupling** — Avoid `hasattr(...)` duck typing, magic attributes, or implicit side channels. Use Protocols with explicit optional methods (e.g., `Strategy.extra_artifacts()`).
+
+8. **Library code raises exceptions** — Library functions (in `src/`) must raise exceptions (ValueError, FileNotFoundError, RuntimeError). Only CLI entry points (`src/__main__.py`, `src/eval/cli.py`, scripts/) may call `sys.exit()`.
+
+9. **Protocols and composition preferred** — Favor Protocol-based design. Avoid unnecessary inheritance or ABC hierarchies.
+
+10. **No abstraction without removal of real coupling** — Do not add abstraction layers unless they directly remove a current defect or reduce real coupling.
+
+### Research-Factory Specific Rules
+
+1. **Predict ≠ Decide must remain explicit** — Forecasting (model beliefs) and trading decisions (execution actions) are separate concerns. Do not merge `Forecaster` into `Policy` or `Policy` into `TradingEngine`.
+
+2. **No leakage-tolerant shortcuts** — Walk-forward integrity is non-negotiable. Train/test splits must be strictly enforced. Features must be causal (no future lookahead).
+
+3. **Walk-forward integrity cannot be weakened** — Do not bypass leakage checks. Do not merge train and test slices. Do not allow test data to influence training.
+
+4. **Costs/risk logic must remain explicit and testable** — Transaction costs (spread, slippage), risk management (drawdown, position limits), and position sizing must be explicit, configurable, and testable.
+
+5. **Robustness/promotion artifacts are part of the research contract** — Campaign manifests, regime slicing, promotion gate logic, and robustness reports are core outputs, not optional extras.
+
+6. **Every meaningful change must preserve or improve reproducibility evidence** — Git hash, config snapshot, and data reference must be captured for every run.
+
+### Required Workflow for Non-Trivial Changes
+
+For each task beyond simple one-line fixes:
+
+1. **Inspect existing code path first** — Read the relevant modules. Understand current behavior before proposing changes.
+
+2. **Identify smallest safe patch** — What is the minimal change that addresses the issue without destabilizing other code?
+
+3. **State assumptions** — What invariants are you assuming? What behavior must be preserved?
+
+4. **Implement** — Make the minimal change. Do not refactor unrelated code.
+
+5. **Run targeted tests** — Test the specific functionality you changed. Use `pytest tests/test_<module>.py` or `pytest -k <keyword>`.
+
+6. **Run broader regression checks** — After targeted tests pass, run `uv run pytest` to ensure no regressions.
+
+7. **Update docs/config/tests if contract changed** — If you changed a public API, artifact schema, or config key, update relevant documentation and tests.
+
+### Required "Do Not Do" List
+
+**NEVER do these things without explicit user approval:**
+
+- No broad rewrites of working code
+- No speculative architecture cleanup
+- No model-zoo expansion during engineering hardening tasks
+- No hidden behavior changes (all changes must be visible in tests or artifacts)
+- No silent fallbacks for critical correctness paths (fail-fast instead)
+- No duplicate sources of truth for paths/config semantics
+- No bypassing tests after refactors ("I'll test it later" is not allowed)
+- No breaking the walk-forward leakage checks
+- No changing artifact schemas without documenting the change
+
+### Required Output Standard
+
+When you complete a task in this repository, you MUST report:
+
+1. **Objective** — What were you asked to do?
+2. **Files changed** — List each file and summarize changes.
+3. **Tests run** — Which tests did you run? Did they pass?
+4. **Risks** — Any residual risks or known issues?
+5. **Artifact behavior preserved or changed?** — Did output schemas or artifact formats change?
+6. **Tracker/docs update needed?** — Should CLAUDE.md, README, or other docs be updated?
+
+### Escalation Path
+
+If you encounter:
+
+- **Ambiguous requirements** — Ask the user for clarification before proceeding.
+- **Conflicts between rules** — Ask the user which rule takes precedence.
+- **Proposed changes that risk determinism** — Halt and ask for approval.
+- **Test failures you cannot diagnose** — Report the failure and stop.
+
+### Examples of Good vs. Bad Patches
+
+**GOOD** — Replace production assert with explicit exception:
+```python
+# Before
+assert len(folds) > 0, "Splitter produced no folds"
+
+# After
+if len(folds) == 0:
+    raise ValueError("Splitter produced no folds — check validation config")
+```
+
+**BAD** — Introducing unnecessary abstraction:
+```python
+# Before (simple, clear)
+fold_result = {"fold_id": fold_id, "net_pnl": net_pnl, ...}
+
+# After (over-engineered for no benefit)
+class FoldResultBuilder:
+    def __init__(self): ...
+    def with_fold_id(self, fold_id): ...
+    def with_net_pnl(self, net_pnl): ...
+    def build(self): ...
+```
+
+**GOOD** — Typed structure for high-risk aggregation:
+```python
+@dataclass
+class FoldResult:
+    fold_id: int
+    net_pnl: float
+    gross_pnl: float
+    # ... explicit typed fields
+```
+
+**BAD** — Rewriting working code for style reasons without functional improvement.
+
+### Summary
+
+This repository is a **research engine** where reproducibility, correctness, and determinism are paramount. Every change must respect these constraints. When in doubt, choose the minimal patch. When uncertain, ask before proceeding. When you break tests, stop and fix them before continuing.

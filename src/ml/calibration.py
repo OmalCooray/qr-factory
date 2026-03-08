@@ -57,8 +57,6 @@ class PlattCalibrator:
     def transform(self, y_prob_raw: np.ndarray) -> np.ndarray:
         """Apply learned sigmoid to raw probabilities.
 
-        Returns input unchanged if not yet fitted (safety fallback).
-
         Parameters
         ----------
         y_prob_raw : array-like, shape (n,)
@@ -68,10 +66,18 @@ class PlattCalibrator:
         -------
         np.ndarray
             Calibrated probabilities in [0, 1].
+
+        Raises
+        ------
+        RuntimeError
+            If transform() is called before fit().
         """
         y_prob_raw = np.asarray(y_prob_raw, dtype=float).ravel()
         if not self._fitted:
-            return y_prob_raw
+            raise RuntimeError(
+                "PlattCalibrator.transform() called before fit() — "
+                "must fit on calibration data first"
+            )
         return self._model.predict_proba(y_prob_raw.reshape(-1, 1))[:, 1]
 
     def transform_series(self, s: pd.Series) -> pd.Series:

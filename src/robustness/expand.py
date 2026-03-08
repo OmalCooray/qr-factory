@@ -9,10 +9,8 @@ from typing import Any
 
 import yaml
 
+from src._paths import REPO_ROOT
 from src.robustness.spec import CampaignSpec, RobustnessScenario
-
-# Repo root (three levels up from src/robustness/expand.py)
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def deep_merge(base: dict, overrides: dict) -> dict:
@@ -119,7 +117,7 @@ def load_campaign_spec(spec_path: str | Path) -> CampaignSpec:
     """
     spec_path = Path(spec_path)
     if not spec_path.is_absolute():
-        spec_path = _REPO_ROOT / spec_path
+        spec_path = REPO_ROOT / spec_path
 
     with open(spec_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
@@ -203,7 +201,7 @@ def build_scenario_configs(
     else:
         baseline_path = Path(campaign.baseline_config)
         if not baseline_path.is_absolute():
-            baseline_path = _REPO_ROOT / baseline_path
+            baseline_path = REPO_ROOT / baseline_path
 
         with open(baseline_path, "r", encoding="utf-8") as f:
             base_config = yaml.safe_load(f)

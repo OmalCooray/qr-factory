@@ -18,6 +18,7 @@ import json
 import logging
 import shutil
 import sys
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from src._paths import REPO_ROOT
 from src.engine.core import TradingEngine
 from src.engine.git_info import get_git_info
 from src.execution.costs import CostConfig
@@ -39,8 +41,37 @@ from src.strategy.registry import build_strategy
 
 log = logging.getLogger(__name__)
 
-# Repo root (two levels up from src/engine/runner.py)
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# ── TYPED STRUCTURES ────────────────────────────────────────────────────────
+
+
+@dataclass
+class FoldResult:
+    """Typed structure for per-fold aggregation results.
+
+    Replaces ad-hoc dict usage with explicit, typed attributes.
+    """
+
+    fold_id: int
+    train_start: int
+    train_end: int
+    test_start: int
+    test_end: int
+    test_bars: int
+    starting_capital: float
+    n_trades: int
+    gross_pnl: float
+    net_pnl: float
+    max_drawdown_pct: float
+    ending_equity: float
+    win_rate: float
+    # Optional ML metrics (set only when ML config present)
+    brier: float | None = None
+    log_loss: float | None = None
+    n_train_rows: int | None = None
+    n_test_rows: int | None = None
+    cal_n_train: int | None = None
+    cal_n_cal: int | None = None
 
 
 # ── 1. CONFIGURATION ────────────────────────────────────────────────────────
@@ -55,10 +86,16 @@ def _load_config(
     """
     cfg_path = Path(config_path)
     if not cfg_path.is_absolute():
-        cfg_path = _REPO_ROOT / cfg_path
+        cfg_path = REPO_ROOT / cfg_path
 
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+
+    # Validate required config keys
+    required_keys = ["symbol", "timeframe", "snapshot_dir", "output_dir", "starting_capital", "strategy"]
+    missing = [k for k in required_keys if k not in cfg]
+    if missing:
+        raise ValueError(f"Config missing required keys: {missing}")
 
     # Strategy
     strategy_cfg = cfg.get("strategy")
@@ -92,7 +129,7 @@ def _create_run_dir(cfg: dict) -> tuple[str, Path]:
 
     Returns (run_id, run_dir).
     """
-    output_dir = _REPO_ROOT / cfg["output_dir"]
+    output_dir = REPO_ROOT / cfg["output_dir"]
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_dir = output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -113,12 +150,11 @@ def _load_market_data(snapshot_dir: str | Path) -> tuple[pd.DataFrame, list[Path
     """
     snapshot_dir = Path(snapshot_dir)
     if not snapshot_dir.is_absolute():
-        snapshot_dir = _REPO_ROOT / snapshot_dir
+        snapshot_dir = REPO_ROOT / snapshot_dir
 
     csv_files = sorted(snapshot_dir.glob("*.csv"))
     if not csv_files:
-        log.error("No CSV files found in %s", snapshot_dir)
-        sys.exit(1)
+        raise FileNotFoundError(f"No CSV files found in {snapshot_dir}")
 
     frames = []
     for csv_file in csv_files:
@@ -192,11 +228,12 @@ def _compute_metrics(
                 0.0,
             ).max()
         )
-        assert abs(engine.risk_manager.metrics()["max_drawdown_pct"] - recomputed) < 1e-10, (
-            f"Drawdown cross-validation failed: "
-            f"tracker={engine.risk_manager.metrics()['max_drawdown_pct']}, "
-            f"recomputed={recomputed}"
-        )
+        tracker_dd = engine.risk_manager.metrics()["max_drawdown_pct"]
+        if abs(tracker_dd - recomputed) >= 1e-10:
+            raise RuntimeError(
+                f"Drawdown cross-validation failed: "
+                f"tracker={tracker_dd}, recomputed={recomputed}"
+            )
 
     start_ts = clean_df["time"].iloc[0].isoformat()
     end_ts = clean_df["time"].iloc[-1].isoformat()
@@ -323,23 +360,15 @@ def _write_artifacts(
     )
     log.info("Wrote DATA_REF.json")
 
-    # 7. regime.csv (if strategy records regime info)
-    if hasattr(strategy, "regime_records") and strategy.regime_records:
-        regime_df = pd.DataFrame(strategy.regime_records)
-        regime_df.to_csv(run_dir / "regime.csv", index=False)
-        log.info("Wrote regime.csv  (%s rows)", f"{len(regime_df):,}")
-
-    # 7b. graph_state.csv (if strategy records graph state)
-    if hasattr(strategy, "graph_state_records") and strategy.graph_state_records:
-        gs_df = pd.DataFrame(strategy.graph_state_records)
-        gs_df.to_csv(run_dir / "graph_state.csv", index=False)
-        log.info("Wrote graph_state.csv  (%s rows)", f"{len(gs_df):,}")
-
-    # 7c. levels.csv (if strategy records structural levels)
-    if hasattr(strategy, "level_records") and strategy.level_records:
-        lv_df = pd.DataFrame(strategy.level_records)
-        lv_df.to_csv(run_dir / "levels.csv", index=False)
-        log.info("Wrote levels.csv  (%s rows)", f"{len(lv_df):,}")
+    # 7. Strategy-specific extra artifacts (explicit method call, not attribute access)
+    if hasattr(strategy, "extra_artifacts") and callable(strategy.extra_artifacts):
+        extra = strategy.extra_artifacts()
+        for artifact_name, records in extra.items():
+            if records:
+                artifact_df = pd.DataFrame(records)
+                artifact_path = run_dir / f"{artifact_name}.csv"
+                artifact_df.to_csv(artifact_path, index=False)
+                log.info("Wrote %s  (%s rows)", artifact_path.name, f"{len(artifact_df):,}")
 
     # 8. README.md
     n_trades = metrics["n_trades"]
@@ -358,6 +387,203 @@ def _write_artifacts(
         "\n".join(readme_lines) + "\n", encoding="utf-8",
     )
     log.info("Wrote README.md")
+
+
+# ── WALK-FORWARD HELPERS ─────────────────────────────────────────────────────
+
+
+def _run_ml_for_fold(
+    ml_cfg: dict,
+    label_cfg: dict,
+    cal_cfg: dict,
+    train_bars: pd.DataFrame,
+    train_features: pd.DataFrame,
+    test_bars: pd.DataFrame,
+    test_features: pd.DataFrame,
+    fold_id: int,
+    clean_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
+    """Run ML training, calibration, and prediction for a single fold.
+
+    Parameters
+    ----------
+    ml_cfg : dict
+        Model configuration
+    label_cfg : dict
+        Label generation configuration
+    cal_cfg : dict
+        Calibration configuration
+    train_bars, train_features : pd.DataFrame
+        Training data
+    test_bars, test_features : pd.DataFrame
+        Test data
+    fold_id : int
+        Current fold index
+    clean_df : pd.DataFrame
+        Full dataset (for timestamp lookups in predictions)
+
+    Returns
+    -------
+    tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]
+        (test_features_with_yhat, ml_fold_metrics, pred_records)
+    """
+    from src.ml.frame import build_forecast_frame
+    from src.ml.predictor import build_predictor
+
+    train_ff = build_forecast_frame(train_bars, train_features, label_cfg)
+    test_ff = build_forecast_frame(test_bars, test_features, label_cfg)
+
+    # ── Calibration path ──
+    cal_method = cal_cfg.get("method", "none")
+    cal_active = cal_method != "none"
+
+    if cal_active:
+        from src.ml.calibration import PlattCalibrator
+
+        cal_fraction = cal_cfg.get("cal_fraction", 0.2)
+        n_train = len(train_ff)
+        n_model_train = int(n_train * (1 - cal_fraction))
+        model_train = train_ff.iloc[:n_model_train]
+        cal_slice = train_ff.iloc[n_model_train:]
+
+        # Fit predictor on model_train only
+        predictor = build_predictor(ml_cfg)
+        predictor.fit(model_train)
+
+        # Fit calibrator on cal_slice
+        cal_raw_probs = predictor.predict(cal_slice)
+        calibrator = PlattCalibrator()
+        calibrator.fit(cal_raw_probs.values, cal_slice["y"].values)
+
+        # Get raw + calibrated probs on test set
+        yhat_raw = predictor.predict(test_ff)
+        yhat = calibrator.transform_series(yhat_raw)
+
+        log.info(
+            "    Calibration: model_train=%d, cal_slice=%d, method=%s",
+            len(model_train), len(cal_slice), cal_method,
+        )
+    else:
+        predictor = build_predictor(ml_cfg)
+        predictor.fit(train_ff)
+        yhat = predictor.predict(test_ff)
+        yhat_raw = None
+
+    # ── Per-fold ML metrics ──
+    y_true = test_ff["y"].values
+    y_prob = yhat.reindex(test_ff.index).values
+    brier = float(np.mean((y_prob - y_true) ** 2))
+
+    try:
+        from sklearn.metrics import log_loss as sk_log_loss
+        ll = float(sk_log_loss(y_true, y_prob))
+    except Exception:
+        ll = None
+
+    ml_fold_metrics: dict[str, Any] = {
+        "brier": brier,
+        "n_train_rows": len(train_ff) if not cal_active else len(model_train),
+        "n_test_rows": len(test_ff),
+    }
+    if ll is not None:
+        ml_fold_metrics["log_loss"] = ll
+    if cal_active:
+        ml_fold_metrics["cal_n_train"] = len(model_train)
+        ml_fold_metrics["cal_n_cal"] = len(cal_slice)
+
+    # Inject predictions into features so strategy sees ctx.features["yhat"]
+    test_features_out = test_features.copy()
+    test_features_out["yhat"] = np.nan
+    test_features_out.loc[yhat.index, "yhat"] = yhat
+
+    # Persist per-fold predictions for evaluation
+    pred_records = pd.DataFrame({
+        "fold_id": fold_id,
+        "timestamp": [clean_df["time"].iloc[idx].isoformat() for idx in test_ff.index],
+        "y_true": y_true,
+        "y_prob": y_prob,
+    })
+    if cal_active and yhat_raw is not None:
+        pred_records["y_prob_raw"] = yhat_raw.reindex(test_ff.index).values
+
+    log.info(
+        "    ML: predictor=%s, train_ff=%d rows, test_ff=%d rows, yhat=%d",
+        ml_cfg.get("type", "?"), len(train_ff), len(test_ff), len(yhat),
+    )
+
+    return test_features_out, ml_fold_metrics, pred_records
+
+
+def _compute_fold_metrics(
+    fold_id: int,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    test_start: int,
+    fold_starting_capital: float,
+    engine: TradingEngine,
+    ml_cfg: dict | None,
+    ml_fold_metrics: dict[str, Any],
+) -> FoldResult:
+    """Compute metrics for a single fold after replay.
+
+    Parameters
+    ----------
+    fold_id : int
+        Current fold index
+    train_idx, test_idx : np.ndarray
+        Train and test index arrays
+    test_start : int
+        Test slice start index
+    fold_starting_capital : float
+        Starting capital for this fold
+    engine : TradingEngine
+        Trading engine with filled trades and equity records
+    ml_cfg : dict | None
+        ML configuration (None if no ML)
+    ml_fold_metrics : dict[str, Any]
+        ML metrics dictionary (populated if ml_cfg is not None)
+
+    Returns
+    -------
+    FoldResult
+        Typed fold result structure
+    """
+    trades_df = pd.DataFrame([f.to_dict() for f in engine.all_fills])
+    n_trades = len(trades_df)
+    net_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
+    gross_pnl = float(trades_df["gross_pnl"].sum()) if not trades_df.empty else 0.0
+    max_dd = engine.risk_manager.metrics()["max_drawdown_pct"]
+    eq_df = pd.DataFrame(engine.equity_records)
+    ending_equity = (
+        float(eq_df["equity"].iloc[-1])
+        if not eq_df.empty
+        else fold_starting_capital
+    )
+    win_rate = float((trades_df["pnl"] > 0).mean()) if n_trades > 0 else 0.0
+
+    # Build typed FoldResult
+    return FoldResult(
+        fold_id=fold_id,
+        train_start=int(train_idx[0]),
+        train_end=int(train_idx[-1]),
+        test_start=test_start,
+        test_end=int(test_idx[-1]),
+        test_bars=len(test_idx),
+        starting_capital=fold_starting_capital,
+        n_trades=n_trades,
+        gross_pnl=gross_pnl,
+        net_pnl=net_pnl,
+        max_drawdown_pct=max_dd,
+        ending_equity=ending_equity,
+        win_rate=win_rate,
+        # ML metrics (populated only if ML config present)
+        brier=ml_fold_metrics.get("brier") if ml_cfg is not None else None,
+        log_loss=ml_fold_metrics.get("log_loss") if ml_cfg is not None else None,
+        n_train_rows=ml_fold_metrics.get("n_train_rows") if ml_cfg is not None else None,
+        n_test_rows=ml_fold_metrics.get("n_test_rows") if ml_cfg is not None else None,
+        cal_n_train=ml_fold_metrics.get("cal_n_train") if ml_cfg is not None else None,
+        cal_n_cal=ml_fold_metrics.get("cal_n_cal") if ml_cfg is not None else None,
+    )
 
 
 # ── WALK-FORWARD ORCHESTRATION ───────────────────────────────────────────────
@@ -408,24 +634,26 @@ def _run_walk_forward(
     )
 
     folds = list(splitter.split(len(clean_df)))
-    assert len(folds) > 0, "Splitter produced no folds"
+    if len(folds) == 0:
+        raise ValueError("Splitter produced no folds — check validation config")
     log.info("Walk-forward: %d folds (%s)", len(folds), splitter)
 
     starting_capital: float = cfg["starting_capital"]
     position_size: float = cfg.get("position_size", 1.0)
     latency_bars: int = cfg.get("execution", {}).get("latency_bars", 0)
 
-    fold_results: list[dict[str, Any]] = []
+    fold_results: list[FoldResult] = []
     all_equity_records: list[dict] = []
     all_fills: list = []
     all_predictions: list[pd.DataFrame] = []
     fold_capital = starting_capital  # carryover: fold N+1 starts where fold N ended
 
     for fold_id, (train_idx, test_idx) in enumerate(folds):
-        assert train_idx[-1] < test_idx[0], (
-            f"Fold {fold_id}: train/test leakage — "
-            f"train_end={train_idx[-1]} >= test_start={test_idx[0]}"
-        )
+        if train_idx[-1] >= test_idx[0]:
+            raise ValueError(
+                f"Fold {fold_id}: train/test leakage detected — "
+                f"train_end={train_idx[-1]} >= test_start={test_idx[0]}"
+            )
 
         test_start = int(test_idx[0])
         test_end = int(test_idx[-1]) + 1
@@ -457,134 +685,44 @@ def _run_walk_forward(
         # ── Optional ML path ──
         ml_cfg = cfg.get("model")
         label_cfg = cfg.get("label")
-        if ml_cfg is not None:
-            from src.ml.frame import build_forecast_frame
-            from src.ml.predictor import build_predictor
+        ml_fold_metrics: dict[str, Any] = {}
 
+        if ml_cfg is not None:
             train_start = int(train_idx[0])
             train_end = int(train_idx[-1]) + 1
             train_bars = clean_df.iloc[train_start:train_end]
             train_features = features.iloc[train_start:train_end]
-
-            train_ff = build_forecast_frame(train_bars, train_features, label_cfg)
-            test_ff = build_forecast_frame(test_bars, test_features, label_cfg)
-
-            # ── Calibration path ──
             cal_cfg = cfg.get("calibration", {})
-            cal_method = cal_cfg.get("method", "none")
-            cal_active = cal_method != "none"
 
-            if cal_active:
-                from src.ml.calibration import PlattCalibrator
-
-                cal_fraction = cal_cfg.get("cal_fraction", 0.2)
-                n_train = len(train_ff)
-                n_model_train = int(n_train * (1 - cal_fraction))
-                model_train = train_ff.iloc[:n_model_train]
-                cal_slice = train_ff.iloc[n_model_train:]
-
-                # Fit predictor on model_train only
-                predictor = build_predictor(ml_cfg)
-                predictor.fit(model_train)
-
-                # Fit calibrator on cal_slice
-                cal_raw_probs = predictor.predict(cal_slice)
-                calibrator = PlattCalibrator()
-                calibrator.fit(cal_raw_probs.values, cal_slice["y"].values)
-
-                # Get raw + calibrated probs on test set
-                yhat_raw = predictor.predict(test_ff)
-                yhat = calibrator.transform_series(yhat_raw)
-
-                log.info(
-                    "    Calibration: model_train=%d, cal_slice=%d, method=%s",
-                    len(model_train), len(cal_slice), cal_method,
-                )
-            else:
-                predictor = build_predictor(ml_cfg)
-                predictor.fit(train_ff)
-                yhat = predictor.predict(test_ff)
-                yhat_raw = None
-
-            # ── Per-fold ML metrics ──
-            y_true = test_ff["y"].values
-            y_prob = yhat.reindex(test_ff.index).values
-            brier = float(np.mean((y_prob - y_true) ** 2))
-
-            try:
-                from sklearn.metrics import log_loss as sk_log_loss
-                ll = float(sk_log_loss(y_true, y_prob))
-            except Exception:
-                ll = None
-
-            ml_fold_metrics: dict[str, Any] = {
-                "brier": brier,
-                "n_train_rows": len(train_ff) if not cal_active else len(model_train),
-                "n_test_rows": len(test_ff),
-            }
-            if ll is not None:
-                ml_fold_metrics["log_loss"] = ll
-            if cal_active:
-                ml_fold_metrics["cal_n_train"] = len(model_train)
-                ml_fold_metrics["cal_n_cal"] = len(cal_slice)
-
-            # Inject predictions into features so strategy sees ctx.features["yhat"]
-            test_features = test_features.copy()
-            test_features["yhat"] = np.nan
-            test_features.loc[yhat.index, "yhat"] = yhat
-
-            # Persist per-fold predictions for evaluation
-            pred_records = pd.DataFrame({
-                "fold_id": fold_id,
-                "timestamp": [clean_df["time"].iloc[idx].isoformat() for idx in test_ff.index],
-                "y_true": y_true,
-                "y_prob": y_prob,
-            })
-            if cal_active and yhat_raw is not None:
-                pred_records["y_prob_raw"] = yhat_raw.reindex(test_ff.index).values
-            all_predictions.append(pred_records)
-
-            log.info(
-                "    ML: predictor=%s, train_ff=%d rows, test_ff=%d rows, yhat=%d",
-                ml_cfg.get("type", "?"), len(train_ff), len(test_ff), len(yhat),
+            test_features, ml_fold_metrics, pred_records = _run_ml_for_fold(
+                ml_cfg=ml_cfg,
+                label_cfg=label_cfg,
+                cal_cfg=cal_cfg,
+                train_bars=train_bars,
+                train_features=train_features,
+                test_bars=test_bars,
+                test_features=test_features,
+                fold_id=fold_id,
+                clean_df=clean_df,
             )
+            all_predictions.append(pred_records)
 
         _run_replay(engine, test_bars, test_features)
 
         # ── Per-fold metrics ──
-        trades_df = pd.DataFrame([f.to_dict() for f in engine.all_fills])
-        n_trades = len(trades_df)
-        net_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
-        gross_pnl = float(trades_df["gross_pnl"].sum()) if not trades_df.empty else 0.0
-        max_dd = engine.risk_manager.metrics()["max_drawdown_pct"]
-        eq_df = pd.DataFrame(engine.equity_records)
-        ending_equity = (
-            float(eq_df["equity"].iloc[-1])
-            if not eq_df.empty
-            else fold_capital
+        fold_result = _compute_fold_metrics(
+            fold_id=fold_id,
+            train_idx=train_idx,
+            test_idx=test_idx,
+            test_start=test_start,
+            fold_starting_capital=fold_starting_capital,
+            engine=engine,
+            ml_cfg=ml_cfg,
+            ml_fold_metrics=ml_fold_metrics,
         )
-        win_rate = float((trades_df["pnl"] > 0).mean()) if n_trades > 0 else 0.0
-
-        fold_result = {
-            "fold_id": fold_id,
-            "train_start": int(train_idx[0]),
-            "train_end": int(train_idx[-1]),
-            "test_start": test_start,
-            "test_end": int(test_idx[-1]),
-            "test_bars": len(test_idx),
-            "starting_capital": fold_starting_capital,
-            "n_trades": n_trades,
-            "gross_pnl": gross_pnl,
-            "net_pnl": net_pnl,
-            "max_drawdown_pct": max_dd,
-            "ending_equity": ending_equity,
-            "win_rate": win_rate,
-        }
 
         # Carry ending equity to next fold
-        fold_capital = ending_equity
-        if ml_cfg is not None:
-            fold_result.update(ml_fold_metrics)
+        fold_capital = fold_result.ending_equity
         fold_results.append(fold_result)
 
         all_equity_records.extend(engine.equity_records)
@@ -598,11 +736,11 @@ def _run_walk_forward(
         log.info("Wrote predictions.csv (%d rows)", sum(len(d) for d in all_predictions))
 
     # ── Aggregate across folds ──
-    total_trades = sum(f["n_trades"] for f in fold_results)
-    total_net_pnl = sum(f["net_pnl"] for f in fold_results)
-    total_gross_pnl = sum(f["gross_pnl"] for f in fold_results)
+    total_trades = sum(f.n_trades for f in fold_results)
+    total_net_pnl = sum(f.net_pnl for f in fold_results)
+    total_gross_pnl = sum(f.gross_pnl for f in fold_results)
     total_cost_pnl = total_gross_pnl - total_net_pnl
-    worst_dd = max(f["max_drawdown_pct"] for f in fold_results)
+    worst_dd = max(f.max_drawdown_pct for f in fold_results)
 
     all_trades_df = pd.DataFrame([f.to_dict() for f in all_fills])
     overall_win_rate = (
@@ -623,22 +761,22 @@ def _run_walk_forward(
     }
 
     # ── Aggregate ML metrics ──
-    if any("brier" in f for f in fold_results):
-        brier_vals = [f["brier"] for f in fold_results if "brier" in f]
+    if any(f.brier is not None for f in fold_results):
+        brier_vals = [f.brier for f in fold_results if f.brier is not None]
         aggregate["avg_brier"] = float(np.mean(brier_vals))
-        ll_vals = [f["log_loss"] for f in fold_results if "log_loss" in f]
+        ll_vals = [f.log_loss for f in fold_results if f.log_loss is not None]
         if ll_vals:
             aggregate["avg_log_loss"] = float(np.mean(ll_vals))
 
     # ── Write fold_metrics.json ──
-    fold_output = {"folds": fold_results, "aggregate": aggregate}
+    fold_output = {"folds": [asdict(f) for f in fold_results], "aggregate": aggregate}
     (run_dir / "fold_metrics.json").write_text(
         json.dumps(fold_output, indent=2), encoding="utf-8",
     )
     log.info("Wrote fold_metrics.json  (%d folds)", len(folds))
 
     # ── Per-fold PnL bar chart ──
-    plot_fold_pnl(fold_results, run_dir / "plots" / "fold_pnl.png")
+    plot_fold_pnl([asdict(f) for f in fold_results], run_dir / "plots" / "fold_pnl.png")
 
     # ── Build metrics.json (compatible with single-run format) ──
     avg_win = (
@@ -662,7 +800,7 @@ def _run_walk_forward(
         "symbol": cfg["symbol"],
         "timeframe": cfg["timeframe"],
         "n_bars": len(clean_df),
-        "n_bars_tested": sum(f["test_bars"] for f in fold_results),
+        "n_bars_tested": sum(f.test_bars for f in fold_results),
         "start_ts": clean_df["time"].iloc[0].isoformat(),
         "end_ts": clean_df["time"].iloc[-1].isoformat(),
         "starting_capital": starting_capital,
@@ -747,7 +885,7 @@ def run_backtest(config_path: str) -> str:
 
     # ── 2. RUN SETUP ──
     run_id, run_dir = _create_run_dir(cfg)
-    git = get_git_info(_REPO_ROOT)
+    git = get_git_info(REPO_ROOT)
 
     log.info("Run ID   : %s", run_id)
     log.info("Output   : %s", run_dir)

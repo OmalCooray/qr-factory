@@ -15,9 +15,9 @@ from typing import Any
 
 import pandas as pd
 
-log = logging.getLogger(__name__)
+from src._paths import REPO_ROOT
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -134,7 +134,7 @@ def load_campaign(campaign_dir: str | Path) -> NormalizedCampaign:
         raise FileNotFoundError(f"MANIFEST.json not found in {campaign_dir}")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    runs_dir = _REPO_ROOT / "runs"
+    runs_dir = REPO_ROOT / "runs"
 
     campaign = NormalizedCampaign(
         campaign_id=manifest.get("campaign_id", "unknown"),

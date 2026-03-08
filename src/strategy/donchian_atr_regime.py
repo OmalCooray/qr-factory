@@ -57,6 +57,10 @@ class DonchianATRRegimeStrategy:
             return False
         return True
 
+    def extra_artifacts(self) -> dict[str, list[dict]]:
+        """Return regime records for persistence."""
+        return {"regime": self.regime_records}
+
     def on_bar(self, ctx: StrategyContext) -> Signal:
         # 1. Feed close to regime filter
         regime_info = self.regime_filter.update(float(ctx.bar["close"]))

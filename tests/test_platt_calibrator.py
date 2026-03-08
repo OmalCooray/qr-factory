@@ -22,12 +22,12 @@ def _make_synthetic_probs(n: int = 500, seed: int = 42):
 
 class TestPlattCalibrator:
 
-    def test_unfitted_returns_input(self):
-        """Unfitted calibrator returns raw probs unchanged (safety fallback)."""
+    def test_unfitted_raises_error(self):
+        """Unfitted calibrator raises RuntimeError (fail-fast behavior)."""
         cal = PlattCalibrator()
         raw = np.array([0.1, 0.5, 0.9])
-        result = cal.transform(raw)
-        np.testing.assert_array_equal(result, raw)
+        with pytest.raises(RuntimeError, match="called before fit"):
+            cal.transform(raw)
         assert not cal.fitted
 
     def test_fitted_changes_probabilities(self):
