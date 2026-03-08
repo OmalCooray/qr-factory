@@ -1,0 +1,81 @@
+# Week 8 robustness campaign — fixed-threshold policy
+#
+# Stress-tests the canonical w7 fixed-threshold baseline across:
+#   - cost stress (spread/slippage multipliers)
+#   - latency proxy (1-bar additional execution delay)
+#   - bounded parameter sweeps (p_enter, p_exit, min_hold_bars)
+#
+# Baseline: configs/w7_policy_fixed.yaml
+#   execution.spread_points = 40, slippage_points = 10
+#   policy: p_enter=0.40, p_exit=0.30, min_hold_bars=5
+#
+# Usage:
+#   uv run python scripts/run_robustness_campaign.py configs/w8_robustness_fixed.yaml
+#   uv run python scripts/run_robustness_campaign.py configs/w8_robustness_fixed.yaml --dry-run
+
+campaign_id: w8_fixed
+baseline_config: configs/w7_policy_fixed.yaml
+description: "Robustness campaign for fixed-threshold policy baseline"
+
+scenarios:
+  # ══════════════════════════════════════════════════════════════════════
+  # A. COST STRESS — spread/slippage multipliers
+  # ══════════════════════════════════════════════════════════════════════
+  - family: cost_stress
+    name: 0.5x_cost
+    description: "Half baseline friction (spread=20, slip=5)"
+    overrides:
+      execution:
+        spread_points: 20
+        slippage_points: 5
+
+  - family: cost_stress
+    name: 1.5x_cost
+    description: "1.5x baseline friction (spread=60, slip=15)"
+    overrides:
+      execution:
+        spread_points: 60
+        slippage_points: 15
+
+  - family: cost_stress
+    name: 2.0x_cost
+    description: "Double baseline friction (spread=80, slip=20)"
+    overrides:
+      execution:
+        spread_points: 80
+        slippage_points: 20
+
+  # ══════════════════════════════════════════════════════════════════════
+  # B. LATENCY PROXY — 1-bar additional execution delay
+  # ══════════════════════════════════════════════════════════════════════
+  - family: latency_proxy
+    name: 1bar_delay
+    description: "1-bar additional execution delay (total 2-bar delay)"
+    overrides:
+      execution:
+        latency_bars: 1
+
+  # ══════════════════════════════════════════════════════════════════════
+  # C. BOUNDED PARAMETER SWEEPS — local perturbations only
+  # ══════════════════════════════════════════════════════════════════════
+
+  # p_enter sweep (baseline = 0.40)
+  - family: parameter_sweep
+    name_prefix: p_enter
+    description: "Entry threshold sensitivity"
+    grid:
+      strategy.policy.p_enter: [0.35, 0.45]
+
+  # p_exit sweep (baseline = 0.30)
+  - family: parameter_sweep
+    name_prefix: p_exit
+    description: "Exit threshold sensitivity"
+    grid:
+      strategy.policy.p_exit: [0.25, 0.35]
+
+  # min_hold_bars sweep (baseline = 5)
+  - family: parameter_sweep
+    name_prefix: min_hold
+    description: "Minimum hold period sensitivity"
+    grid:
+      strategy.policy.min_hold_bars: [3, 7]

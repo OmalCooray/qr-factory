@@ -1,0 +1,42 @@
+# Week 8 robustness campaign — example / smoke test
+#
+# Demonstrates the harness with a small set of scenarios.
+# NOT a full robustness analysis — just validates infrastructure wiring.
+#
+# Usage:
+#   uv run python scripts/run_robustness_campaign.py configs/w8_robustness_example.yaml --dry-run
+
+campaign_id: w8_example
+baseline_config: configs/w7_policy_fixed.yaml
+description: "Minimal example campaign for harness validation"
+
+scenarios:
+  # ── Cost stress ──
+  - family: cost_stress
+    name: 2x_spread
+    description: "Double the bid-ask spread"
+    overrides:
+      execution:
+        spread_points: 80
+
+  - family: cost_stress
+    name: 3x_spread
+    description: "Triple the bid-ask spread"
+    overrides:
+      execution:
+        spread_points: 120
+
+  # ── Latency proxy ──
+  - family: latency_proxy
+    name: high_slippage
+    description: "Simulate execution latency via increased slippage"
+    overrides:
+      execution:
+        slippage_points: 30
+
+  # ── Parameter sweep (grid expansion) ──
+  - family: parameter_sweep
+    name_prefix: p_enter
+    description: "Sweep entry threshold"
+    grid:
+      strategy.policy.p_enter: [0.35, 0.45, 0.55]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import pandas as pd
 
@@ -17,8 +17,13 @@ from src.indicators.impl.ma import SMA
 from src.indicators.impl.rsi import RSI
 from src.indicators.impl.session import TradingSession
 from src.indicators.impl.transforms import Diff, Lag, ZScoreRolling
+from src.policy.fixed_threshold import FixedThresholdPolicy
+from src.policy.probability_sized import ProbabilitySizedPolicy
 from src.strategy.base import StrategyContext
 from src.strategy.signal import Signal
+
+if TYPE_CHECKING:
+    from src.policy.base import Policy
 
 
 # ── Indicator / transform maps for config-driven features ────────────────────
@@ -90,7 +95,19 @@ class MLProbThresholdStrategy:
     min_hold_bars: int = 0
     _name: str = "ml_prob_threshold"
     _warmup_bars: int = 0
-    _bars_in_position: list = field(default_factory=lambda: [0])
+    _policy: Policy | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self._policy is None:
+            object.__setattr__(
+                self,
+                "_policy",
+                FixedThresholdPolicy(
+                    p_enter=self.p_enter,
+                    p_exit=self.p_exit,
+                    min_hold_bars=self.min_hold_bars,
+                ),
+            )
 
     @property
     def name(self) -> str:
@@ -115,64 +132,64 @@ class MLProbThresholdStrategy:
 
     def on_bar(self, ctx: StrategyContext) -> Signal:
         if not self.can_trade(ctx):
-            self._bars_in_position[0] = 0
+            self._policy.reset()
             return Signal(direction=0.0, strength=0.0, reason="no_yhat")
 
         yhat = float(ctx.features["yhat"])
-        effective_p_exit = self.p_exit if self.p_exit is not None else self.p_enter
-        is_long = ctx.position > 0
-
-        if is_long:
-            self._bars_in_position[0] += 1
-            bars_held = self._bars_in_position[0]
-
-            # Hold: still above p_exit OR haven't held long enough
-            if yhat >= effective_p_exit or bars_held < self.min_hold_bars:
-                return Signal(
-                    direction=1.0, strength=1.0,
-                    reason=f"hold yhat={yhat:.3f} bars={bars_held}",
-                )
-            # Exit: below p_exit AND held long enough
-            self._bars_in_position[0] = 0
-            return Signal(
-                direction=0.0, strength=1.0,
-                reason=f"exit yhat={yhat:.3f}<p_exit={effective_p_exit:.3f}",
-            )
-        else:
-            # Flat: enter only if above p_enter
-            if yhat >= self.p_enter:
-                self._bars_in_position[0] = 1
-                return Signal(
-                    direction=1.0, strength=1.0,
-                    reason=f"enter yhat={yhat:.3f}>=p_enter",
-                )
-            self._bars_in_position[0] = 0
-            return Signal(
-                direction=0.0, strength=1.0,
-                reason=f"flat yhat={yhat:.3f}<p_enter",
-            )
+        return self._policy.decide(ctx, yhat)
 
 
 def build(params: dict) -> tuple[MLProbThresholdStrategy, list[FeatureSpec]]:
     """Builder for strategy registry.
 
-    Supports two modes:
+    Supports two modes for features:
     1. **Legacy** (no ``features`` key): uses ``fast_period``/``slow_period``
        to create EMA + SMA specs.
     2. **Config-driven** (``features`` key present): builds FeatureSpecs from
        the list of indicator/transform dicts.
-    """
-    p_enter = params.get("p_enter", 0.55)
-    p_exit = params.get("p_exit", None)
-    min_hold_bars = params.get("min_hold_bars", 0)
 
+    Policy can be specified two ways (precedence: explicit > inline):
+    - **Explicit** ``policy:`` sub-block with ``type: fixed_threshold`` and
+      its own ``p_enter``/``p_exit``/``min_hold_bars``.
+    - **Inline** (default): ``p_enter``/``p_exit``/``min_hold_bars`` at the
+      strategy level; ``__post_init__`` builds the policy automatically.
+    """
+    # ── Policy ───────────────────────────────────────────────────────────
+    policy_cfg = params.get("policy")
+    if policy_cfg is not None:
+        policy_type = policy_cfg.get("type", "fixed_threshold")
+        if policy_type == "fixed_threshold":
+            policy = FixedThresholdPolicy(
+                p_enter=policy_cfg.get("p_enter", 0.55),
+                p_exit=policy_cfg.get("p_exit", None),
+                min_hold_bars=policy_cfg.get("min_hold_bars", 0),
+            )
+        elif policy_type == "probability_sized":
+            policy = ProbabilitySizedPolicy(
+                p_enter=policy_cfg.get("p_enter", 0.55),
+                p_exit=policy_cfg.get("p_exit", None),
+                p_full=policy_cfg.get("p_full", 0.65),
+                min_size=policy_cfg.get("min_size", 0.25),
+                max_size=policy_cfg.get("max_size", 1.0),
+                min_hold_bars=policy_cfg.get("min_hold_bars", 0),
+            )
+        else:
+            raise ValueError(f"Unknown policy type: {policy_type!r}")
+        p_enter = policy.p_enter
+        p_exit = policy.p_exit
+        min_hold_bars = policy.min_hold_bars
+    else:
+        policy = None
+        p_enter = params.get("p_enter", 0.55)
+        p_exit = params.get("p_exit", None)
+        min_hold_bars = params.get("min_hold_bars", 0)
+
+    # ── Features ─────────────────────────────────────────────────────────
     feature_cfgs = params.get("features")
     if feature_cfgs is not None:
-        # Config-driven rich features
         specs = _build_feature_specs(feature_cfgs)
         warmup = FeaturePipeline(specs).max_lookback
     else:
-        # Legacy: EMA + SMA
         fast_period = params.get("fast_period", 5)
         slow_period = params.get("slow_period", 10)
         specs = [
@@ -186,5 +203,6 @@ def build(params: dict) -> tuple[MLProbThresholdStrategy, list[FeatureSpec]]:
         p_exit=p_exit,
         min_hold_bars=min_hold_bars,
         _warmup_bars=warmup,
+        _policy=policy,
     )
     return strategy, specs

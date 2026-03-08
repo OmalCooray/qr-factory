@@ -9,6 +9,7 @@ Both backtest and future live mode use this same core.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -38,6 +39,10 @@ class TradingEngine:
         Size multiplier applied when converting Signal → OrderIntent.
     cost_config : CostConfig
         Execution cost parameters (spread + slippage).  Defaults to zero cost.
+    latency_bars : int
+        Additional execution delay in bars beyond the normal 1-bar delay.
+        ``0`` (default) = standard next-bar execution.
+        ``1`` = intent created at bar *T* executes at bar *T+2*.
     """
 
     def __init__(
@@ -47,12 +52,14 @@ class TradingEngine:
         starting_capital: float,
         position_size: float = 1.0,
         cost_config: CostConfig | None = None,
+        latency_bars: int = 0,
     ) -> None:
         self.strategy = strategy
         self.risk_manager = risk_manager
         self.starting_capital = starting_capital
         self.position_size = position_size
         self.cost_config = cost_config or CostConfig()
+        self._latency_bars = latency_bars
 
         # Position state
         self._equity = starting_capital
@@ -61,7 +68,7 @@ class TradingEngine:
         self._entry_price = 0.0  # net (cost-adjusted)
         self._entry_mid = 0.0  # mid (for gross tracking)
         self._entry_ts = ""
-        self._pending_intent: Optional[OrderIntent] = None
+        self._intent_queue: deque[OrderIntent] = deque()
 
         # Collected outputs
         self.all_fills: list[Fill] = []
@@ -86,12 +93,12 @@ class TradingEngine:
         bar_ts = bar_row["time"]
         bar_ts_str = bar_ts.isoformat()
 
-        # ── EXECUTION ENGINE: fill previous bar's intent at Open ──
-        target_position = (
-            self._pending_intent.target_position
-            if self._pending_intent is not None
-            else self._position
-        )
+        # ── EXECUTION ENGINE: fill delayed intent at Open ──
+        if len(self._intent_queue) > self._latency_bars:
+            ready_intent = self._intent_queue.popleft()
+            target_position = ready_intent.target_position
+        else:
+            target_position = self._position
         (
             self._position,
             self._entry_price,
@@ -154,7 +161,7 @@ class TradingEngine:
         )
 
         if is_last:
-            self._pending_intent = None
+            self._intent_queue.clear()
             return
 
         # ── MODEL → SIGNAL: strategy reads features, produces signal ──
@@ -171,15 +178,20 @@ class TradingEngine:
         # ── DECISION LOGIC: signal + risk → order intent ──
         intent = self._decide(signal, risk_action)
 
-        # ── ORDER INTENT: stored for next bar's execution ──
-        self._pending_intent = intent
+        # ── ORDER INTENT: queued for future execution ──
+        self._intent_queue.append(intent)
 
     def _decide(self, signal: Signal, risk_action: RiskAction) -> OrderIntent:
         """Convert Signal + RiskAction → OrderIntent (sizing + risk gate).
 
-        If the strategy encodes a dynamic lot size in signal.strength
-        (indicated by reason containing 'breakout' and strength being large),
-        it is used directly.  Otherwise the engine's fixed position_size applies.
+        Sizing modes (evaluated in order):
+        1. **Dynamic override** — when ``strength > position_size`` the strategy
+           computed its own lot size (e.g. ATR-based); use it directly.
+        2. **Fractional** — ``strength`` in (0, 1] scales ``position_size``.
+           Policies like ``ProbabilitySizedPolicy`` use this to express
+           confidence-proportional sizing.
+        3. **Fixed** — ``strength == 1.0`` (the default from
+           ``FixedThresholdPolicy``) gives full ``position_size``.
         """
         if risk_action.flatten:
             return OrderIntent(target_position=0.0, reason=f"risk:{risk_action.reason}")
@@ -189,7 +201,7 @@ class TradingEngine:
         if signal.strength > self.position_size and signal.direction != 0.0:
             size = signal.strength
         else:
-            size = self.position_size
+            size = signal.strength * self.position_size
 
         target = signal.direction * size
         return OrderIntent(target_position=target, reason=signal.reason)

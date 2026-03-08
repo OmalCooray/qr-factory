@@ -413,6 +413,7 @@ def _run_walk_forward(
 
     starting_capital: float = cfg["starting_capital"]
     position_size: float = cfg.get("position_size", 1.0)
+    latency_bars: int = cfg.get("execution", {}).get("latency_bars", 0)
 
     fold_results: list[dict[str, Any]] = []
     all_equity_records: list[dict] = []
@@ -446,6 +447,7 @@ def _run_walk_forward(
         risk_manager = RiskManager(risk_config, fold_capital)
         engine = TradingEngine(
             strategy, risk_manager, fold_capital, position_size, cost_config,
+            latency_bars=latency_bars,
         )
 
         # Run replay on test slice only
@@ -793,9 +795,10 @@ def run_backtest(config_path: str) -> str:
     # ── 6. REPLAY (model → signal → decision → execution, per bar) ──
     starting_capital: float = cfg["starting_capital"]
     position_size: float = cfg.get("position_size", 1.0)
+    latency_bars: int = cfg.get("execution", {}).get("latency_bars", 0)
     risk_manager = RiskManager(risk_config, starting_capital)
 
-    engine = TradingEngine(strategy, risk_manager, starting_capital, position_size, cost_config)
+    engine = TradingEngine(strategy, risk_manager, starting_capital, position_size, cost_config, latency_bars=latency_bars)
     _run_replay(engine, clean_df, X)
 
     # ── 7. METRICS ──

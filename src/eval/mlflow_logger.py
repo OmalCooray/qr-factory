@@ -16,6 +16,7 @@ def log_run_to_mlflow(
     evaluation: dict,
     calibration: dict | None = None,
     experiment_name: str = "qr-factory",
+    extra_tags: dict[str, str] | None = None,
 ) -> str | None:
     """Log a completed run to MLflow (local SQLite-backed tracking).
 
@@ -29,6 +30,8 @@ def log_run_to_mlflow(
         Output of ``compute_calibration()`` (optional).
     experiment_name : str
         MLflow experiment name.
+    extra_tags : dict[str, str] | None
+        Additional tags to attach (e.g. robustness campaign metadata).
 
     Returns
     -------
@@ -63,10 +66,12 @@ def log_run_to_mlflow(
         # -- Params --
         cal_cfg = config.get("calibration", {})
         cal_method = cal_cfg.get("method", "none")
+        strategy_cfg = config.get("strategy", {})
+        policy_cfg = strategy_cfg.get("policy", {})
         params = {
             "symbol": config.get("symbol", meta.get("symbol", "")),
             "timeframe": config.get("timeframe", meta.get("timeframe", "")),
-            "strategy_type": config.get("strategy", {}).get("type", ""),
+            "strategy_type": strategy_cfg.get("type", ""),
             "model_type": config.get("model", {}).get("type", ""),
             "validation_mode": config.get("validation", {}).get("mode", ""),
             "label_type": config.get("label", {}).get("type", ""),
@@ -74,7 +79,15 @@ def log_run_to_mlflow(
             "calibrated": str(cal_method != "none").lower(),
             "calibration_method": cal_method,
             "cal_fraction": str(cal_cfg.get("cal_fraction", "")),
+            "policy_type": policy_cfg.get("type", "inline_fixed_threshold"),
+            "policy_p_enter": str(strategy_cfg.get("p_enter", policy_cfg.get("p_enter", ""))),
+            "policy_p_exit": str(strategy_cfg.get("p_exit", policy_cfg.get("p_exit", ""))),
+            "policy_min_hold_bars": str(strategy_cfg.get("min_hold_bars", policy_cfg.get("min_hold_bars", ""))),
         }
+        if policy_cfg.get("type") == "probability_sized":
+            params["policy_p_full"] = str(policy_cfg.get("p_full", ""))
+            params["policy_min_size"] = str(policy_cfg.get("min_size", ""))
+            params["policy_max_size"] = str(policy_cfg.get("max_size", ""))
         mlflow.log_params({k: v for k, v in params.items() if v})
 
         # -- Metrics --
@@ -136,6 +149,8 @@ def log_run_to_mlflow(
         if git_dirty is not None:
             tags["git_dirty"] = str(git_dirty)
 
+        if extra_tags:
+            tags.update(extra_tags)
         mlflow.set_tags({k: v for k, v in tags.items() if v})
 
         mlf_run_id = mlf_run.info.run_id
